@@ -1,0 +1,210 @@
+---
+title: "RStorm"
+author: "jharner"
+date: "April 26, 2015"
+output: html_document
+---
+
+## Introduction
+
+Streaming data, consisting of indefinitely and possibly time-evolving sequences, are becoming ubiquitous in many branches of science. The omnipresence of streaming data poses new challenges for statistics and machine learning.
+
+Streaming learning algorithms can informally be described as algorithms which never “look back” to earlier data arriving at $t < t'$. Streaming algorithms provide a computationally efficient way to deal with continuous data streams by summarizing all historic data into a limited set of parameters. Streaming (online) learning provides both numerical as well as estimation challenges. For simple estimators, such as sample means and variances, multiple streaming algorithms can be deployed. For more complex statistical models, closed forms to exactly minimize popular cost functions in a stream are often unavailable.
+
+Computer scientists recently developed a series of software packages for the streaming processing of data in production environments. Frameworks, such as S4 by Yahoo and Twitter’s Storm, provide an infrastructure for real-time streaming computation of event-driven data, which is scalable and reliable.
+
+Recently, efforts have been made to facilitate easy testing and development of streaming processes within R for example with the `stream`. `stream` allows users of R to setup (or simulate) a data stream and specify data stream tasks to analyze the stream.
+
+While stream allows for the development and testing of streaming analysis in R, it does not have a strong link to current production environments in which streams can be utilized. Implementations of data streams in R analogous to production environments such as Twitter’s Storm are currently lacking. `RStorm` models the topology structure introduced by `Storm2`, to enable development, testing, and graphical representation of streaming algorithms. `RStorm` is intended as a research and development package for those wishing to implement the analysis of data streams in frameworks outside of R, but who want to utilize R’s extensive plotting and data generating abilities to test their implementations.
+
+## Package RStorm: Counting words
+
+`RStorm` is introduced using the canonical streaming example used often for the introduction of `Storm`: a streaming word count. For `RStorm` the basic terminology and concepts from `Storm3` are adapted, which are briefly explained before discussing the implementation of a streaming word count in `RStorm`. The aim of the streaming word count algorithm is to, given a stream of sentences – such as posts to a web service like Twitter – count the frequency of occurrence of each word.
+
+In `Storm`, a data stream consists of a *spout* – the data source – from which tuples are passed along a *topology*. The *topology* is a description of the spout and a series of *bolts*, which themselves are functional blocks of code. A bolt performs operations on *tuples*, the data objects that are passed between bolts in the stream. Bolts can store the results of their operations in a *local hashmap* (or database) and *emit* results (again tuples) to other bolts further down the topology. The topology, the bolts, the spout, the tuples, and the hashmap(s) together compose the most important concepts to understand a stream implemented in `RStorm`.
+
+The *topology* is a description of the whole streaming process, and a solution to the word-count problem is given by the simple topology that is graphically presented in Figure 1. This topology describes that sentences (*tuples*) are emitted by the *spout*. These tuples – containing a full sentence
+– are analyzed by the first processing bolt. This first bolt, `SplitSentence(tuple)`, splits a sentence up into individual words and emits these single words as tuples. Next, these individual words are counted by the `CountWords(tuple)` bolt. The topology depicted in Figure 1 contains the core elements needed to understand the functioning of RStorm for a general streaming process. A topology consists of a description of the ordering of spouts and bolts in a stream. Tuples are the main data format to pass information between bolts. A call to `Emit(tuple,...)` within a bolt will make the emitted tuple available for other bolts. Table 1 summarizes the most important functions of the `RStorm` package to facilitate a stream and briefly explains their functionality.
+
+### Word count in RStorm and Java & Python
+
+In `RStorm` the emulation of a streaming word count can be setup as follows: First, one loads `RStorm` and opens a datafile containing multiple sentences:
+```{r}
+library(RStorm)  # Include package RStorm
+data(sentences)
+```
+
+The data, which is a `data.frame`, will function as the spout by emitting data from it row-by-row. After defining the spout, the functional bolts need to be specified.
+```{r}
+# R function that receives a tuple
+# (a sentence in this case)
+# and splits it into words:
+SplitSentence <- function(tuple, ...){
+  # Split the sentence into words
+  words <- unlist(strsplit(as.character(tuple$sentence), " "))
+  
+  # For each word emit a tuple
+  for (word in words)
+    Emit(Tuple(data.frame(word = word)),...)
+  }
+```
+`SplitSentence()` function receives tuples, each of which contains a sentence. Each sentence is split into words which are emitted further down the stream using the `Emit()` (or `storm.emit()`) function.
+
+The second bolt is the `CountWord()` bolt,
+```{r}
+# R word counting function:
+CountWord <- function(tuple, ...) {
+  # Get the hashmap "word count"
+  words <- GetHash("wordcount")
+  if (tuple$word %in% words$word) {
+    # Increment the word count:
+    words[words$word == tuple$word,]$count <- words[words$word ==
+                                                      tuple$word,]$count + 1
+  }
+  else { # If the word does not exist add the word with count 1
+    words <- rbind(words, data.frame(word = tuple$word, count = 1))
+  }
+  # Store the hashmap
+  SetHash("wordcount", words)
+}
+```
+The `CountWord()` bolt receives tuples containing individual words. The `RStorm` implementation first uses the `GetHash()` function to get the entries of a hashmap / local-store called `"wordcount"`. In production systems this often is a hashmap, or, if need be, some kind of database system. In `RStorm` this functionality is implemented using `GetHash` and `SetHash` as methods to easily store and retrieve objects. If the hashmap exists, the function subsequently checks whether the word is already in the hashmap. If the word is not found, the new word is added to the hashmap with a count of 1, otherwise the current count is incremented by 1.
+
+After specifying the two bolts the *topology* needs to be specified. The topology determines the processing order of the streaming process. Each time a bolt is added to a topology in `RStorm` the user is alerted to the position of that bolt within in the stream, and the listen argument can be used to specify which emitted tuples a bolt should receive. 
+```{r}
+# Setting up the R topology
+# Create topology:
+topology <- Topology(sentences)
+# Add the bolts:
+topology <- AddBolt(topology, Bolt(SplitSentence, listen = 0))
+topology <- AddBolt(topology, Bolt(CountWord, listen = 1))
+```
+
+Once the topology is fully specified, the stream can be run using the following call:
+```{r}
+# Run the stream:
+result <- RStorm(topology)
+
+# Obtain results stored in "wordcount"
+counts <- GetHash("wordcount", result)
+head(counts)
+```
+
+The function `GetHash()` is overloaded for when the stream has finished and the function is used outside of a Bolt. It can be used to retrieve a hashmap once the result of a streaming process is passed to it as a second argument. The returned counts object is a `data.frame` containing columns of words and their associated counts and can be used to create a table of word counts.
+    
+## RStorm examples
+
+### Example 1: Comparisons of streaming variance 
+
+This example compares two bolts for the streaming computation of a sample variance. It introduces the `TrackRow(data)` functionality implemented in RStorm which can be used to monitor the progress of parameters at each time point in the stream. 
+
+After specifying the functional bolts, the topology can be specified. Creating a topology object starts with the specification of a `data.frame`. This dataframe will be iterated through row-by-row to emulate a steam.
+
+```{r}
+var.SS <- function(x, ...) {
+  # Get values stored in hashmap
+  params <- GetHash("params1")
+  if (!is.data.frame(params)) {
+    # If no hashmap exists initialise:
+    params <- list()
+    params$n <- params$sum <- params$sum2 <- 0
+  }
+  
+  # Perform updates:
+  n <- params$n + 1
+  S <- params$sum + as.numeric(x[1])
+  SS <- params$sum2 + as.numeric(x[1]^2)
+  
+  # Store the hashmap:
+  SetHash("params1",
+    data.frame(n = n, sum = S, sum2 = SS))
+  
+  # Track the variance at time t:
+  var<-1/(n * (n-1)) * (n*SS-S^2)
+  TrackRow("var.SS", data.frame(var = var))
+}
+
+var.Welford <- function(x, ...) {
+   x <- as.numeric(x[1])
+   params <- GetHash("params2")
+   if (!is.data.frame(params)) {
+     params <- list()
+     params$M <- params$S <- params$n <- 0
+   }
+   n <- params$n + 1
+   M <- params$M + (x-params$M)/(n+1)
+   S <- params$S + (x-params$M)*(x-M)
+   SetHash("params2", data.frame(n = n, M = M, S = S))
+   var <- ifelse(n > 1, S / (n - 1), 0)
+   TrackRow("var.Welford", data.frame(var = var))
+}
+
+library(RStorm)
+t <- 1000
+x <- rnorm(t, 10^8, 1)
+topology <- Topology(data.frame(x = x))
+topology <- AddBolt(topology, Bolt(var.SS, listen = 0))
+topology <- AddBolt(topology, Bolt(var.Welford, listen = 0))
+result <- RStorm(topology)
+str(result)
+```
+
+### Example 2: Online gradient descent
+
+This example provides an implementation in `RStorm` of an logistic regression using stochastic gradient descent (SGD), together with a Double or Nothing (DoNB) bootstrap to estimate the uncertainty of the parameters. The functional bolt first performs the sampling needed for the DoNB bootstrap and subsequently computes the update of the feature vector $w$:
+```{r}
+StochasticGradientDescent <- function(tuple, learn = .5, boltID, ...) {
+  if (rbinom(1, 1, .5) == 1) { # Only add the observation half of the times
+    # get the set up weights for this bolt
+    weights <- GetHash(paste("Weights_", boltID, sep = ""))
+    if (!is.data.frame(weights)) {
+      weights <- data.frame(beta = c(-1, 2))
+    }
+    w <- weights$beta  # get weights-vector w
+    y <- as.double(tuple[1])  # get scalar y
+    X <- as.double(tuple[2:3])  # get feature-vector X
+    grad <- (1 / ( 1 + exp(-t(w) %*% X)) - as.double(tuple[1])) * X
+    SetHash(paste("Weights_", boltID, sep = ""),
+            data.frame(beta = w - learn * grad))  # save weights
+  } # otherwise ignore
+}
+```
+
+The dataset for this example contains 1000 dichotomous outcomes using only a single predictor:
+```{r}
+n <- 1000
+X <- matrix(c(rep(1, n), rnorm(n, 0, 1)), ncol = 2)
+beta <- c(1, 2)
+y <- rbinom(n, 1, plogis(X %*% beta))
+data <- cbind(X, y)
+```
+
+The DoNB is implemented by specifying within the functional bolt whether or not a datapoint in the stream should contribute to the update of the weights. Using the `boltID` parameter the same functional bolt can be used multiple times in the stream, each with its own local store. The topology is specified as follows:
+```{r}
+topology <- Topology(data.frame(data), .verbose = FALSE)
+for (i in 1:100) {
+  topology <- AddBolt(topology, Bolt(StochasticGradientDescent,
+                      listen = 0, boltID = i), .verbose = FALSE)
+}
+result <- RStorm(topology)
+parmEstimates <- GetHashList(result)
+parmEstimates[[1]]
+```
+
+This topology is represented graphically in Figure 3. After running the topology, the `GetHashList()` function is used to retrieve all of the objects saved using `SetHash()` at once. This object is a list containing all the dataframes that are stored during the stream.
+
+## Conclusions and limitations
+
+Datasets in all areas of science are growing increasingly large, and they are often collected continuously. There is a need for novel analysis methods which synchronize current methodological advances with the emerging opportunities of streaming data. Streaming algorithms provide opportunities to deal with extremely large and ever growing data sets in (near) real time. However, the development of streaming algorithms for complex models is often cumbersome: the software packages that facilitate streaming processing in production environments do not provide statisticians with the simulation, estimation, and plotting tools they are used to. `RStorm` implements a streaming architecture modeled on Storm for easy development and testing of streaming algorithms in R.
+
+In the future we intend to further develop the `RStorm` package to include:
+
+1. default implementations of often occurring bolts (such as streaming means and variances of variables), and  
+2. the ability to use, one-to-one, the bolts developed in `RStorm` in `Storm`.
+
+We hope to further develop `RStorm` such that true data streams in Storm can use functional bolts developed in R. `RStorm` is not designed as a scalable tool for production processing of data streams, and we do not believe that this is R’s core strength. However, by providing the ability to test and develop functional bolts in R, and use these bolts directly in production streaming processing applications, `RStorm` aims to support users of R to quickly implement scalable and fault tolerant streaming applications.
+
+
+
+
+

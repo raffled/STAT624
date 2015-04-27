@@ -1,0 +1,123 @@
+parallel
+--------
+
+The `parallel` package is derived from the `snow` and `multicore` packages. Many of the functions from the packages can be used with minor changes.
+
+The `parallel` package integrates with the L'Ecuyer-CMRG random number generator (RNG) in R 2.14.0. The seed of this generator can be advanced a fixed number of steps making it a useful `parallel` RNG. `multicore` derived functions now have true RNG support.
+
+### How It Works
+
+The `parallel` package can run on Posix-based multicore-based systems using functions such as `mclapply()` and `mcparallel()` derived from the `multicore` package. It can also be used on a PSOCK cluster and functions such as `parLapply()` and `clusterApplyLB` will execute on multicore Windows systems and Linux clusters. Since parallel can be used on cluster objects created by `snow`, the MPI transport can be used.
+
+### Working with It
+
+For Posix-based systems, functions like `mclapply` can be used. However, used `detectCores()` rather than the `mc.cores` argument.
+
+```{r}
+library(parallel)
+library(MASS)
+RNGkind("L'Ecuyer-CMRG")
+mc.cores <- detectCores()
+results <- mclapply(rep(25, 4), function(nstart) kmeans(Boston, 4, nstart=nstart),
+  mc.cores=mc.cores)
+i <- sapply(results, function(result) result$tot.withinss)
+result <- results[[which.min(i)]]
+result
+```
+
+For Windows, use the snow derived APIs in `parallel`. For example:
+```{r}
+# options(mc.cores=detectCores())
+# cl <- makeCluster(4)
+cl <- makeCluster(detectCores())
+clusterSetRNGStream(cl)
+clusterEvalQ(cl, library(MASS))
+results <- clusterApply(cl, rep(25, 4), function(nstart) kmeans(Boston, 4,
+  nstart=nstart))
+i <- sapply(results, function(result) result$tot.withinss)
+result <- results[[which.min(i)]]
+result
+stopCluster(cl)
+```
+
+### Creating Clusters with makeCluster
+
+You cannot use `multicore` derived functions such as `mclapply()` and `pvec()` on Windows or Linux clusters. Instead use `snow` derived functions such as `parLapply()` or `clusterApplyLB()`.
+
+The `parallel` package comes with two transports: `PSOCK` and `FORK`. `PSOCK` is a streamlined verion of snow's `SOCK` and communicates between the master and the workers using socket connections. In the `makeCluster()` function, `PSOCK` is the default type.
+
+The `FORK` transport starts workers using the `mcfork()` function and communicates between the master and the workers using socket connections. `mcfork()` builds on `fork()` and thus a Linux cluster is not supported. Since it is Posix based, Windows is not supported. 
+
+```{r}
+library(parallel)
+cl <- makeCluster(4)
+stopCluster(cl)
+cl <- makeCluster(detectCores())
+stopCluster(cl)
+cl <- makeCluster(4, type="FORK")
+stopCluster(cl)
+```
+
+`FORK` workers inherit the data and the environment of the master. However, a `FORK` cluster is persistent. Thus, you should create a `FORK` cluster before calling `parLapply`.
+
+Code for Posix-based systems and Windows:
+```{r}
+library(parallel)
+# type <- if (exists("mcfork", mode="function")) "FORK" else "PSOCK"
+cores <- getOption("mc.cores", detectCores())
+cl <- makeForkCluster(cores)
+# cl <- makeCluster(cores, type=type)
+results <- parLapply(cl, 1:10, sqrt)
+results
+stopCluster(cl)
+```
+
+### Parallel Random Number Generation
+
+The parallel package supports parallel random number generation using ideas from the `rlecuyer` package.
+
+`RNGkind()` sets the random number generator. Leave `mc.set.seed` set to `TRUE`. For `multicore` derived functions, each worker gets a new random number stream.
+
+```{r}
+library(parallel)
+RNGkind("L'Ecuyer-CMRG")
+mclapply(1:2, function(i) rnorm(1))
+```
+
+If `mc.reset.stream()` is called, the parallel random number generator is reinitialized using the master seed.
+
+```{r}
+RNGkind("L'Ecuyer-CMRG")
+set.seed(7777442)
+mc.reset.stream()
+unlist(mclapply(1:2, function(i) rnorm(1)))
+set.seed(7777442)
+mc.reset.stream()
+unlist(mclapply(1:2, function(i) rnorm(1)))
+```
+
+To use parallel RNG in snow-derived functions, use `clusterSetRNGStream()`. The seed is an argument to this function.
+
+```{r}
+library(parallel)
+cl <- makeCluster(4, type = "FORK")
+clusterSetRNGStream(cl, 7777442)
+unlist(clusterEvalQ(cl, rnorm(1)))
+clusterSetRNGStream(cl, 7777442)
+unlist(clusterEvalQ(cl, rnorm(1)))
+cl
+stopCluster(cl)
+```
+
+The `parallel` package includes utilities for advancing the seed: `nextRNGStream()` and `nextRNGSubStream()`.
+
+```{r}
+.Random.seed <<- nextRNGSubStream(.Random.seed)
+```
+
+## Summary of Differences
+
+See text.
+
+
+

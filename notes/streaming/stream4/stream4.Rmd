@@ -1,0 +1,313 @@
+---
+title: "stream introduction"
+author: "jharner"
+date: "April 8, 2015"
+output: html_document
+---
+
+## 4. Data stream data (DSD)
+
+### 4.1. Introduction
+
+The first step in the stream workflow is to select a data stream implemented as a data stream data (DSD) object. This object can be (see Fig. 3):
+
+* a management layer on top of a real data stream,  
+* a wrapper for data stored in memory or on disk, or  
+* a generator which simulates a data stream with know properties for controlled experiments.  
+
+All DSD classes extend the abstract base class `DSD`. There are currently two types of DSD implementations,
+
+* classes which implement R-based data streams (`DSD_R`) and  
+* MOA-based stream generators (`DSD_MOA`) provided in `streamMOA`.  
+
+Note that abstract classes define interfaces and only implement common functionality.
+
+The package `stream` provides currently the following set of DSD implementations (see the paper for specifics):
+
+* Simulated streams with static structure  
+* Simulated streams with concept drift  
+* Connectors to real data and streams  
+* In-flight stream operations  
+
+All DSD implementations share a simple interface consisting of the following two functions:  
+
+1. A creator function. This function typically has the same name as the class. By definition the function name starts with the prefix `DSD_`. The list of parameters depends on the type of data stream it creates.
+
+2. A data generating function
+`get_points(x, n = 1, outofpoints = c("stop", "warn", "ignore") , ...)`. This function is used to obtain the next data point (or next `n` data points) from the stream represented by object `x`. 
+
+Next to these core functions several utility functions like `print()`, `plot()` and `write_stream()`, to save a part of a data stream to disk, are provided by stream for class DSD and are available for all data stream sources.
+
+### 4.2. Example: Creating a data stream
+
+```{r}
+library("stream")
+stream <- DSD_Gaussians(k = 3, d = 3, noise = .05, p = c(.5, .3, .1))
+stream
+```
+
+After loading the `stream` package we call the creator function for the class `DSD_Gaussians` specifying the number of clusters as `k = 3` and a data dimensionality of `d = 3` with an added noise of 5% of the generated data points. Each cluster is represented by a multivariate Gaussian distribution with a randomly chosen mean (cluster center) and covariance matrix.
+
+New data points are requested from the stream using `get_points()`. When a new data point is requested from this generator, a cluster is chosen randomly (using the probability weights in `p`) and then a point is drawn from the multivariate Gaussian distribution given by the mean and covariance matrix of the cluster. Noise points are generated in a bounding box from a d-dimensional uniform distribution. The following instruction requests `n = 5` new data points.
+```{r}
+p <- get_points(stream, n = 5)
+p
+```
+
+The result is a data frame containing the data points as rows. For evaluation it is often important to know the ground truth, i.e., from which cluster each point was created. Many generators also return the ground truth (class or cluster label) if they are called with `class = TRUE`.
+```{r}
+p <- get_points(stream, n = 100, class = TRUE)
+head(p, n = 10)
+```
+
+Note that the data was created by a generator with 5% noise. Noise points do not belong to any cluster and thus have a class label of `NA`.
+
+Next, we plot 500 points from the data stream to get an idea about its structure.
+```{r}
+plot(stream, n = 500)
+```
+
+The assignment values are automatically used to distinguish between clusters using color and different plotting symbols. Noise points are plotted as gray dots. The data can also be projected on its first two principal components using `method="pc"`.
+```{r}
+plot(stream, n = 500, method = "pc")
+```
+
+`Stream` also supports data streams which contain concept drift. Several examples of such data stream generators are collected in `DSD_Benchmark`. We create an instance of the first benchmark generator which creates two clusters moving in two-dimensional space. One moves from top left to bottom right and the other one moves from bottom left to top right. Both clusters overlap when they meet exactly in the center of the data space.
+```{r}
+stream <- DSD_Benchmark(1)
+stream
+```
+
+To show concept drift, we request four times 250 data points from the stream and plot them. To fast-forward in the stream we request 1400 points in between the plots and ignore them.
+```{r}
+for(i in 1:4) {
+  plot(stream, 250, xlim = c(0, 1), ylim = c(0, 1), main=i)
+  tmp <- get_points(stream, n = 1400)
+}
+```
+
+Arrows are added to high-light the direction of cluster movement.
+
+An animation of the data can be generated using `animate_data()`. We use `reset_stream()` to start the animation at the beginning of the stream.
+```{r, eval=FALSE}
+reset_stream(stream)
+animate_data(stream, n = 10000, horizon = 100, xlim = c(0, 1), ylim = c(0, 1))
+```
+
+Animations are recorded using package `animation` and can be replayed using `ani.replay()`.
+```{r, eval=FALSE}
+library("animation")
+animation::ani.options(interval = .1)
+ani.replay()
+```
+
+Animations can also be saved as an animation embedded in a HTML document or an animated image in the Graphics Interchange Format (GIF) which can easily be used in presentations.
+```{r, eval=FALSE}
+saveHTML(ani.replay())
+saveGIF(ani.replay())
+```
+
+More formats for saving the animation are available in package `animation`.
+
+### 4.3 Example: Reading and writing data streams
+
+Although data streams are potentially unbounded by definition and thus storing the complete stream is infeasible, it is often useful to store parts of a stream on disk. For example, a small part of a stream with an interesting feature can be used to test how a new algorithm handles this particular case. `stream` has support for reading and writing parts of data streams through R connections which provide a set of functions to interface file-like objects like files, compressed files, pipes, URLs or sockets
+
+
+We start the example by creating a DSD object.:
+```{r}
+stream <- DSD_Gaussians(k = 3, d = 5)
+```
+
+Next, we write 100 data points to disk using `write_stream()`.
+```{r}
+write_stream(stream, "data.csv", n = 100, sep = ",")
+```
+
+`write_stream()` accepts a DSD object, and then either a connection or a file name. The instruction above creates a new file called `dsd_data.cvs` (an existing file will be overwritten). The `sep` parameter defines how the dimensions in each data point (row) are separated. Here a comma is used to create a comma separated values file. The actual writing is done by R’s `write.table()` function and additional parameters are passed on. Data points are requested individually from the stream and then written to the connection.
+
+The `DSD_ReadCSV` object is used to read a stream from a connection or a file. It reads a single data point at a time using the `read.table()` function. Since, after the read data is processed, e.g., by a data stream clustering algorithm, it it removed from memory, we can efficiently process files larger than the available main memory in a streaming fashion.
+
+In the following example we create a data stream object representing data stored as a compressed csv-file in the package’s examples directory.
+```{r}
+file <- system.file("examples", "kddcup10000.data.gz", package = "stream")
+stream_file <- DSD_ReadCSV(gzfile(file),
+                           take = c(1, 5, 6, 8:11, 13:20, 23:41), class = 42, k = 7)
+stream_file
+```
+
+Using `take` and `class` we define which columns should be used as data and which column contains the ground truth assignment. We also specify the true number of clusters `k`. Ground truth and number of clusters do not need to be specified if they are not available or no evaluation is planned. Note that at this point no data has been read in. Reading only occurs when `get_points` is called.
+```{r}
+get_points(stream_file, n = 5)
+```
+
+For clustering it is often necessary to normalize data first. Streams can be scaled and centered in-flight using `DSD_ScaleStream`. The scaling and centering factors are computed from a set of points (by default 1000) from the beginning of the stream.
+```{r}
+stream_scaled <- DSD_ScaleStream(stream_file, center = TRUE, scale = TRUE)
+get_points(stream_scaled, n = 5)
+```
+
+### 4.4. Example: Replaying a data stream
+
+An important feature of stream is the ability to replay portions of a data stream. With this feature we can capture a special feature of the data (e.g., an anomaly) and then adapt our algorithm and test if the change improved the behavior on exactly that data. Also, this feature can be used to conduct experiments where different algorithms need to be compared using exactly the same data.
+
+There are several ways to replay streams. As described in the previous section, we can write a portion of a stream to disk with `write_stream()` and then use `DSD_ReadCSV` to read the stream portion back every time it is needed. However, often the interesting portion of the stream is small enough to fit into main memory or might be already available as a matrix or a data frame in R. In this case we can use the `DSD` class `DSD_Memory` which provides a stream interface for a matrix-like objects.
+
+For illustration purposes, we use data for four major European stock market indices available in R as a data frame.
+```{r}
+data("EuStockMarkets", package = "datasets")
+head(EuStockMarkets)
+```
+
+Next, we create a `DSD_Memory` object. The number of true clusters `k` is unknown.
+```{r}
+replayer <- DSD_Memory(EuStockMarkets, k = NA)
+replayer
+```
+
+Every time we get a point from replayer, the stream moves to the next position (row) in the data.
+```{r}
+get_points(replayer, n = 5)
+replayer
+```
+
+Note that the stream is now at position 6. The stream only has 1854 points left and the following request for more than the available number of data points results in an error.
+```{r}
+get_points(replayer, n = 2000)
+```
+
+Note that with the parameter `outofpoints` this behavior can be changed to a warning or ignoring the problem.
+
+`DSD_Memory` and `DSD_ReadCSV` can be created to loop indefinitely, i.e., start over once the last data point is reached. This is achieved by passing `loop = TRUE` to the creator function. The current position in the stream for those two types of DSD classes can also be reset to the beginning of the stream or to an arbitrary position via `reset_stream()`. Here we set the stream to position 100.
+```{r}
+reset_stream(replayer, pos = 100)
+replayer
+```
+
+`DSD_Memory` also accepts other matrix-like objects. This includes data shared between processes or data that is too large to fit into main memory represented by memory-mapped files using `ffdf` objects from package `ff` or `big.matrix` objects from package `bigmemory`. In fact any object that provides basic matrix functions like `dim()` and subsetting with `[` can be used.
+
+## 5. Data stream task (DST)
+
+After choosing a `DSD` class to use as the data stream source, the next step in the workflow is to define a data stream task (`DST`). In stream, a `DST` refers to any data mining task that can be applied to data streams. The design is flexible enough for future extensions including even currently unknown tasks. Figure 7 shows the class hierarchy for `DST`.
+
+It is important to note that the `DST` base class is shown merely for conceptual purpose and is not directly visible in the code. The reason is that the actual implementations of data stream operators (`DSO`), clustering (`DSC`), classification (`DSClass`) or frequent pattern mining (`DSFPM`) are typically quite different and the benefit of sharing methods would be minimal.
+
+DST classes implement mutable objects which can be changed without creating a copy. This is more efficient, since otherwise a new copy of all data structures used by the algorithm would be created for processing each data point. Mutable objects can be implemented in R using environments or the recently introduced `reference` class construct.
+
+We will restrict the following discussion to data stream clustering (`DSC`) since stream currently focuses on this task. `stream` currently provides moving windows and sampling from a stream as data stream operators (`DSO`). The operators provide simple functionality which can be used by other tasks and we will discuss them in the context of clustering.
+
+### 5.1. Introduction to data stream clustering (DSC)
+
+Data stream clustering algorithms are implemented as subclasses of the abstract class `DSC`. First we differentiate between different interfaces for clustering algorithms. `DSC_R` provides a native R interface, while `DSC_MOA` (available in `streamMOA`) provides an interface to algorithms implemented for the Java-based MOA framework. DSCs implement the online process as subclasses of `DSC_Micro` (since it produces micro-clusters) and the online process as subclasses of `DSC_Macro`. To implement the typical two-stage process in data stream clustering, stream provides `DSC_TwoStage` which can be used to combine any available micro and a macro-clustering algorithm.
+
+The following function can be used for objects of subclasses of DSC:
+
+* A creator function which creates an empty clustering. Creator function names by definition start with the prefix `DSC_`.  
+* `update(dsc, dsd, n = 1, verbose = FALSE, ...)` which accepts a DSC object and a DSD object. It requests the next n data points from dsd and adds them to the clustering in dsc.  
+* `nclusters(x, type = c("auto", "micro", "macro"), ...)` returns the number of clusters currently in the DSC object. This is important since the number of clusters is not fixed for most data stream clustering algorithms.  
+
+DSC objects can contain several clusterings (e.g., micro and macro-clusters) at the same time. The default value for type is `auto` and results in `DSC_Micro` objects to return micro-cluster information and `DSC_Macro` objects to return macro-cluster information. Most `DSC_Macro` objects also store micro-clusters and using type these can also be retrieved. Some `DSC_Micro` implementations also have a reclustering procedure implemented and type also allows the user to retrieve macro-cluster information. Trying to access cluster information that is not available in the clustering results in an error. type is also available in many other functions.
+
+* `get_centers(x, type = c("auto", "micro", "macro"), ...)` returns the centers of the clusters of the DSC object. Depending on the clustering algorithm the centers can be centroids, medoids, centers of dense grids, etc.  
+* `get_weights(x, type = c("auto", "micro", "macro"), ...)` returns the weights of the clusters in the DSC object x. How the weights are calculated depends on the clustering algorithm. Typically they are a function of the number of points assigned to each cluster.  
+
+Etc., see the paper.
+
+Figure 8 shows the typical use of `update()` and other functions. Clustering on a data stream (DSD) is performed with `update()` on a DSC object. This is typically done with a `DSC_micro` object which will perform its online clustering process and the resulting micro-clusters are available from the object after clustering (via `get_centers()`, etc.). Note, that DSC classes implement mutable objects and thus the result of update() does not need to be reassigned to its name.
+
+Reclustering (the o✏ine component of data stream clustering) is performed with
+```
+recluster(macro, dsc, type="auto", ...)
+```
+
+Here the centers in dsc are used as pseudo-points by the `DSC_macro` object macro. After reclustering the macro-clusters can be inspected (using `get_centers()`, etc.) and the assignment of micro-clusters to macro-clusters is available via `microToMacro()`. The following data stream clustering algorithms are currently available:  
+
+* `DSC_CluStream` (`streamMOA`) implements the CluStream algorithm by Aggarwal et al. (2003). The algorithm maintains a user-specified number of micro-clusters. The number of clusters is held constant by merging and removing clusters. The suggested reclustering method is weighted k-means.  
+* `DSC_ClusTree` (`streamMOA`) implements the ClusTree algorithm by Kranen, Assent, Baldauf, and Seidl (2009). The algorithm organizes micro-clusters in a tree structure for faster access and automatically adapts micro-cluster sizes based on the variance of the assigned data points. Either k-means or reachability from DBSCAN can be used for reclustering.  
+* `DSC_DenStream` (`streamMOA`) is the DenStream algorithm by Cao et al. (2006). DenStream estimates the density of micro-clusters in a user-specified neighborhood. To suppress noise, it also organizes micro-clusters based on their weight as core and outlier micro-clusters. Core Micro-clusters are reclustered using reachability from DBSCAN.
+
+Etc., see the paper.
+
+Although the authors of most data stream clustering algorithms suggest a specific reclustering method, in stream any available method can be applied. For reclustering, the following clustering algorithms are currently available as subclasses of DSC_Macro:  
+
+* `DSC_DBSCAN` implements DBSCAN by Ester et al. (1996).  
+* `DSC_Hierarchical` interfaces R’s `hclust` function.  
+* `DSC_Kmeans` interface R’s `k-means` implementation and a version of k-means where the data points (micro-clusters) are weighted by the micro-cluster weights, i.e., a micro- cluster representing more data points has more weight.   
+* `DSC_Reachability` uses DBSCAN’s concept of reachability for micro-clusters. Two micro-clusters are directly reachable if they are closer than a user-specified distance epsilon from each other (they are within each other’s epsilon-neighborhood). Two micro-clusters are reachable and therefore assigned to the same macro-cluster if they are connected by a chain of directly reachable micro-clusters. Note that this concept is related to hierarchical clustering with single linkage and the dendrogram cut at he height of epsilon.  
+
+Some data clustering algorithms create small clusters for noise or outliers in the data. stream provides `prune_clusters(dsc, threshold = .05, weight = TRUE)` to remove a given percentage (given by threshold) of the clusters with the least weight. The percentage is either computed based on the number of clusters (e.g., remove 5% of the number of clusters) or based on the total weight of the clustering (e.g., remove enough clusters to reduce the total weight by 5%). The default `weight = TRUE` is based on the total weight. Pruning is also available in many macro-clustering algorithms as parameter  `min_weight` which excludes all micro-clusters with a weight less than the specified value before reclustering.
+
+To specify a full data stream clustering process with an arbitrarily chosen online and o✏ine algorithm, stream implements a special DSC class called `DSC_TwoStage` which can combine any `DSC_Micro` and `DSC_Macro` implementation into a two-stage process.
+
+### 5.2. Example: Clustering a data stream
+
+In this example we show how to cluster data using DSC implementations. First, we create a data stream (three Gaussian clusters in two dimensions with 5% noise).
+```{r}
+library("stream")
+stream <- DSD_Gaussians(k = 3, d = 2, noise = .05)
+```
+
+Next, we prepare the clustering algorithm. We use here `DSC_DStream` which implements the D-Stream algorithm. D-Stream assigns points to cells in a grid. For the example we use a gridsize of 0.1.
+```{r}
+dstream <- DSC_DStream(gridsize = .1, Cm = 1.2)
+dstream
+```
+
+After creating an empty clustering, we are ready to cluster data from the stream using the `update()` function. Note, that `update()` will implicitly alter the mutable DSC object so no reassignment is necessary.
+```{r}
+update(dstream, stream, n = 500)
+dstream
+```
+
+After clustering 500 data points, the clustering contains 13 micro-clusters. Note that the implementation of D-Stream has built-in reclustering and therefore also shows macro-clusters. The first few micro-cluster centers are:
+```{r}
+head(get_centers(dstream))
+```
+
+It is often helpful to visualize the results of the clustering operation.
+```{r}
+plot(dstream, stream)
+```
+
+The micro-clusters are plotted in red on top of gray data points. The size of the micro-clusters indicates the weight, i.e., the number of data points represented by each micro-cluster. 
+
+For the grid-based D-Stream algorithm there is also a second type of visualization available which shows the used dense and transitional grid cells as gray squares.
+```{r}
+plot(dstream, stream, grid = TRUE)
+```
+
+The micro-clusters are shown as dense grid cells (density is coded with gray values).
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,214 @@
+---
+title: 'Large complex data: divide and recombine (D&R) with RHIPE'
+author: "jharner"
+date: "February 22, 2015"
+output: html_document
+---
+
+## 1. Introduction
+
+The two goals in our development of the divide and recombine (D&R) approach to the analysis of large complex data are:  
+
+* a deep, comprehensive analysis, including visualization of the detailed data at their finest granularity, which minimizes the risk of losing important information in the data;  
+* a computational environment where an analyst programs exclusively with an interactive language for data analysis (ILDA), making programming with the data very efficient.  
+
+Examples:  
+
+* the first validated model for voice over the Internet (VoIP) traffic;  
+* the first algorithm for detecting keystrokes in any Internet connection;   
+* the first simple, validated model for best-effort Internet traffic that provides a new mathematical foundation for the traffic.
+
+### 1.1. D&R basics
+
+The computations have three parts:  
+
+* the data are divided into subsets by S computations;  
+* an analytic method is applied to subsets by W computations where each is strictly within a subset;  
+
+> The analytics are *statistical methods* whose output is categorical or numeric, and *visualization methods* whose output is visual. An analytic method is applied to a subset independently, which means without communication with other subset computations.
+
+* outputs from W are recombined by B computations which are between subsets.  
+
+Consider a linear regression with the model $Y = X \beta + \epsilon$. $Y$ is $n \times 1$, the dependent variable; $X$ is $n \times p$, $p$ explanatory variables; $\epsilon is $n \times 1$ with elements that are i.i.d. normal with mean 0; and $\beta$ is $p \times 1$, the regression coefficients. Suppose $m = rm$ for integers $r$ and $m$. For $s = 1, \dots, r$, subset $s$ is $X_s\, (m \times p)$ and $Y_s\, (m \times 1)$, where $X_s$ is $m$ rows of $X$, and $Y_s$ is the corresponding rows of $Y$.
+\[
+  X = row^r_{s=1}[ X_s] \quad Y = row^r_{s=1}[ Y_s],
+\]
+where $row$ is matrix row concatenation. These subsets are the result of the $S$ computations. For subset $s$, the optimal least-squares estimate is
+\[
+  \dot\beta_s = (X^\prime_s X_s)^{-1}X_sY.
+\]
+These estimates are the results of the $W$ computations. Suppose we recombine by taking the vector mean across subsets $s$, that is, the means of the elements of $\dot\beta_s$. The D&R estimate, the result of the $B$ computations, is
+\[
+ \ddot\beta = \frac{1}{r}\sum^r_{s=1}\dot\beta_s.
+\]
+
+A division is a data structure. Analyses of large complex data often consist of a number of different types of analysis that call for different data structures, and therefore different divisions of the entire dataset. The application of analytic methods to the subsets of a single division is a division analysis thread. A thread typically has sub-threads. For example, it can be an analysis of just a certain part of each subset, or a further analysis of outputs of $W$ or $B$ computations. The D&R framework for an analysis thread is illustrated in Figure 1.
+
+### 1.2. Exploiting the D&R approach
+
+Except for the cases where there is a fast parallel algorithm for the methods, the computation is either infeasible, or impractical because it takes so long. D&R solves this problem. Intensive parts of the S-B-W computations can run in parallel.
+
+These embarrassingly parallel computations become feasible and run fast on a distributed computational environment designed for them. B computations run across subsets, but certain aspects of them are embarrassingly parallel.
+
+Consider applying a visualization method to a large complex dataset. Deep analysis requires that we visualize not just summary statistics of the data, but also the detailed data at their finest granularity. D&R enables this too, but by a different mechanism: statistical sampling. Subsets contain detailed data.
+
+In D&R, the analyst applies a visualization method to each of a number of subsets, typically not to all because there are too many to view.
+
+### 1.3. Two research thrusts
+
+There are two research thrusts:  
+
+* use statistical thinking and theory to develop “best” division and recombination procedures for analytic methods;  
+* develop a D&R computational environment, which is made up of:
+1. the R interactive language for data analysis,  
+2. the Hadoop distributed file system and parallel compute engine,  
+3. the RHIPE merger of R and Hadoop.  
+
+## 2. D&R illustrated: Internet packet-level traffic
+
+The analyses will be on large complex packet-level Internet traffic data for research in network performance and cyber security. Each Internet communication is a connection between two hosts (computers). An example is a client host downloading a Web page from a server host. Information sent from one host to the other is broken up into packets of 1460 bytes or less, sent across the Internet, and reassembled at the destination. Attached to each packet are headers that manage the connection and other network processes.
+
+We collect packet-level data in both directions on an Internet link: arrival times and header fields. Each collection has from hundreds of thousands to billions of connections. The number of packets per connection varies from a few to the low hundreds of thousands. In each investigation, typically one analysis thread is modeling by connection. So the division in this case is by connection. Each connection subset is a table. The columns are variables, which are the timestamp and header fields. The rows are the packets, so the number of rows varies by connection.
+
+Voice over the Internet (VoIP) was studied. We collected data on the Global Crossing core VoIP network. The hosts were 27 gateways to the network. Each connection is a call, with two directions, each a semi-call. Because we model each direction independently, the division is by semi-call, so each subset is the packet data of one semi-call. The data consist of 1.237 billion packets for 277,540 semi-calls.
+
+Each semi-call has an alternating sequence of transmission intervals with voice packets, and silence intervals with no voice packets. A silence notification packet starts a silence interval and a packet containing voice ends it, which allows the start and end of each interval to be identified. Each semi-call is a stochastic process of alternating intervals. Modeling the process was a critical task in the overall modeling of semi-calls.
+
+## 3. Division and recombination procedures
+
+### 3.1. Conditioning-variable division
+
+*Conditioning-variable division* is a class of division procedures that depend on the subject matter under investigation. Certain variables are selected as *conditioning variables*, and the data are divided into subsets by conditioning on their values.  
+1. The conditioning variables become *between subset-variables (BSVs)* with one value per subset.  
+2. Other variables, *within-subset variables (WSVs)*, vary within each subset.  
+
+Analyses reveal the relationship of the WSVs in each subset, and how it changes with the BSVs.
+
+See the VoIP example.
+
+Conditioning-variable division is not new and is already widely used because it is a powerful mechanism for analysis of data of any size. It is the basis of the trellis display framework for visualization.
+
+### 3.2. Replicate division
+
+*Replicate division* arises in different situations. e.g., when subsets are still too large after conditioning-variable division. For replicate division, the data are $n$ observations of $q$ variables. They are seen as replicates, all coming from the same experiment under the same conditions.
+
+Two types:  
+
+* *Random-replicate (RR) division* uses random sampling of observations without replacement to create subsets.  
+
+> This is attractive because it is computationally fast, but it makes no effort to create subsets each of which is representative of the dataset.  
+
+* *Near-exact-replicate (NER) division* makes the effort.  
+
+> The $n$ observations are broken up into local neighborhoods with approximately the same number of observations; a replicate subset is formed by choosing one point from each neighborhood.
+
+### 3.3. Statistic recombination
+
+The output of a statistical method applied to each subset is numeric and categorical values. Any function of the data is a statistic, so the recombination of the outputs of a statistical method is a *statistic recombination*. Very often the statistic is an estimate of an estimand. In this case, the division procedure and the statistic recombination procedure together become a D&R estimator whose statistical properties we can study.
+
+We can pair this with random replicate division to form an estimator, or with near-exact replicate division to form another, and use statistical theory to compare performance. 
+
+### 3.4. Analytic recombination
+
+Analytic recombination is simply a continued analysis of the outputs of a W or B computation. This is quite common, and often, when the outputs are a substantial data reduction, they can be treated as small data.
+
+### 3.5. Visualization recombination
+
+Visualization recombination provides a mechanism for visualization of the detailed data at their finest granularity. Subsets contain the detailed data, so we choose a visualization method and apply it to subsets. The sampling plan uses BSVs, which makes the process rigorous. Application of the method starts with a statistical W computation on each sampled subset, resulting in numeric and categorical output that are shown on a plot. The visualization recombination is a display design that combines all subset plots.
+
+Three general sampling procedures:  
+
+* representative
+
+> A representative sample is chosen to cover the joint region of values of a set of BSVs.
+
+* focused
+
+>  A focused sample explores a particular sub-region of interest.
+
+* cognostic
+
+> Cognostics is a general notion of Tukey that we have tailored to D&R. BSVs are developed that search for certain kinds of statistical behavior in a subset. One application is to find subsets that deviate from a consistent pattern seen in visualization for a representative sample.
+
+## 4. A D&R computational environment
+
+### 4.1. RHIPE
+
+The data analyst writes R code for:
+
+* S computations that divide the data into subsets, which create R objects containing the subsets.
+
+> The code is an input to `RHIPE` R commands that communicate with Hadoop. The subset R objects are distributed by Hadoop across the nodes of the cluster using HDFS. For the regression example, each R object contains one pair, $X_s$ and $Y_s$.
+
+* W computations that apply an analytic method to each subset, which create R objects containing the outputs of the method applications.
+
+> The analyst gives this R code to `RHIPE`. For the regression example, the outputs of the W computations are the $r$ subset regression coefficients $\dot\beta$. The W outputs are B inputs. 
+
+* B computations that recombine the B inputs, and create R objects containing the B outputs.
+
+> The analyst gives this R code to `RHIPE`. For the regression example, the output is is a single R object, the vector mean estimate $\ddot\beta$.
+
+For the RHIPE-Hadoop computation framework, W computations by their very specification are embarrassingly parallel. Much of the tasking of the S computations are as well. While B computations might appear not to be, certain aspects are also embarrassingly parallel.
+
+`RHIPE` R commands can have Hadoop write outputs of S, W, or B computations to HDFS.
+
+* S output objects are always written because they create division subsets which persist across an analysis thread.  
+* B outputs are almost always written to the HDFS because they tend to be either a final answer for a method, or data that are further analyzed to get a final answer.  
+* W computations are sometimes written, but are typically not when they are just the means to the recombination end.  
+
+Whether written or not, the B and W computations can be run simultaneously with W outputs passed to B in memory.
+
+Embarrassingly parallel computations of S, W, or B that are run by Hadoop consist of the same R code being applied to each object in a collection of objects. Hadoop assigns a core to compute on each object. There are typically far more objects than cores. When a core finishes its computation on an object, Hadoop assigns it to a new object. To minimize overall elapsed read/write time when objects are read from the HDFS, the Hadoop scheduling algorithm seeks to assign a core of a node as close as possible to the node on which an object is stored. In other words, Hadoop brings the core to the data, rather than the other way around.
+
+### 4.2. D&R computation: From elephants to mice
+
+Our R-RHIPE-Hadoop environment has two sets of servers.  
+
+* The RR cluster runs R and RHIPE.
+
+> The analyst logs in to RR, and carries out a traditional R interactive session. RHIPE commands are also issued here.
+
+* The RH cluster runs RHIPE and Hadoop.
+
+> The ensuing S-W-B executions are on RH. Output to be saved is written to the HDFS on RH. These big RH computations are “elephants”.
+
+Analyses also occurs on RR in the R global environment. Some of these R commands execute virtually instantaneously, and need an instantaneous response. These are “mice”.
+
+Analysis in R occurs when outputs of W or B computations are collectively a small dataset to be further studied in an analysis sub-thread. In our analyses, visualization recombination is in R because sampled subsets are collectively a small dataset.
+
+### 4.3. Designed experiments for optimizing R-RHIPE-Hadoop performance
+
+Factors from a spectrum of sources affect the performance of each distributed R-RHIPE-Hadoop job.  
+
+* User-specified factors: subset size; number of subsets; and properties of the R commands.  
+* Cluster hardware factors.  
+
+In between are a large number of RHIPE and Hadoop configuration parameters. The response is the elapsed time of RHIPE R code. The system is very complex, and empirical study through designed experiments is needed to understand the dependence of the response on the factors. 
+
+See the logistic regression example.
+
+## 5. Statistical theory for D&R estimation recombination
+
+See the paper.
+
+## 6. MapReduce for D&R
+
+Map and Reduce are the two modes of Hadoop computation.
+
+* Map is an embarrassingly parallel computation mode, and does not compute across subsets. It executes part of the W computations.  
+* Reduce can compute across subsets, and executes some B computations and some of the W computations.  
+* Both are involved in S computations.  
+
+### 6.1. The timed logistic regression
+
+### 6.2. Modeling the transmission-silence process
+
+### 6.3 The connection-level division of internet packet-level data
+
+
+
+
+
+
+
+

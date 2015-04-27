@@ -1,0 +1,186 @@
+---
+title: 'Chap 2: Getting Started'
+author: "jharner"
+date: "January 11, 2015"
+output: html_document
+---
+
+## Overview
+
+In this chapter, you’ll learn:  
+* How to set up the Data Science Toolbox  
+* Essential concepts and tools necessary to do data science at the command line
+
+## Setting Up Your Data Science Toolbox
+
+See the steps for setting up the Data Science Toolbox on your machine using VirtualBox and Vagrant.  
+[Data Science at the Command Line](http://datascienceatthecommandline.com)
+
+## Essential Concepts and Tools
+
+The environment is roughly defined by four layers:   
+* Command-line tools: e.g., `ls` and `cat`;  
+* Terminal: where you type commands;  
+* Shell: Data Science Toolbox uses the Bash shell;  
+* Operating System: Linux distribution called Ubuntu.  
+
+### Executing a Command-Line Tool
+
+See text.
+
+```
+seq 3
+```
+
+The command-line tool `pwd` prints the name of the directory where you currently are. By default, when you log in, this is your *home directory*. You can view the contents of this directory with `ls`.
+```
+pwd
+ls
+```
+
+The command-line tool `cd`, which is a Bash builtin, allows you to navigate to a different directory.
+```
+cd book/ch02/
+cd data
+pwd
+cd ..
+pwd
+```
+The part after `cd` specifies to which directory you want to navigate. Values that come after the command are called command-line arguments or options. The two dots refer to the parent directory.
+
+We pass three command-line arguments to `head`. The first one is an option. The second one is a value that belongs to the option. The third one is a filename.
+```
+head -n 3 data/movies.txt
+```
+
+A long command can be broken up with either a backslash `\` or a pipe symbol `|`. Be sure to first match any quotation marks `"` and `'`.
+```
+echo 'Hello'\
+ ' world' |
+ wc
+echo 'Hello world' | wc
+```
+
+### Five Types of Command-Line Tools
+
+Each command-line tool is one of the following five types:  
+* A binary executable
+
+> A binary executable is created by compiling source code to machine code.
+
+* A shell builtin
+
+> Shell builtins are command-line tools provided by the shell, which is Bash in our case. Examples include `cd` and `help`.
+
+* An interpreted script
+
+> An interpreted script is a text file that is executed by a binary executable. Examples include: Python, R, and Bash.  
+book/ch02/fac.py 5
+
+* A shell function
+
+> A shell function is a function that is executed by the shell itself; in our case, it is executed by Bash. They provide similar functionality to a Bash script, but they are usually (though not necessarily) smaller than scripts.  
+fac() { (echo 1; seq $1) | paste -s -d\* | bc; }  
+fac 5
+
+* An alias
+
+> Aliases are like macros. If you often find yourself executing a certain command with the same parameters, you can define an alias for this.  
+alias l='ls -1 --group-directories-first'  
+alias moer=more  
+cd~  
+l  
+
+You can find out the type of a command-line tool with `type`, which is itself a shell builtin.
+```
+type -a pwd
+type-a cd
+type -a fac
+type -a l
+```
+
+### Combining Command-Line Tools
+
+The power of the command line comes from its ability to combine these small yet powerful command-line tools. The most common way of combining command-line tools is through a *pipe*. The output from the first tool is passed to the second tool. 
+
+`seq` generates a sequence of numbers. The output of a command-line tool is by default passed on to the terminal, which displays it on our screen. We can pipe the ouput of seq to a second tool, called `grep`, which can be used to filter lines. Imagine that we only want to see numbers that contain a “3.”
+```
+seq 5
+seq 30 | grep 3
+```
+
+If we wanted to know how many numbers between 1 and 100 contain a “3”, we can use `wc`, which is very good at counting things. The `-l` option specifies that `wc` should only output the number of lines.
+```
+seq 100 | grep 3 | wc -l
+```
+
+### Redirecting Input and Output
+
+By default, the output of the last command-line tool in the pipeline is outputted to the terminal. You can also save this output to a file. This is called output redirection
+```
+cd ~/book/ch02
+seq 10 > data/ten-numbers
+```
+
+You can also append the output to a file with `>>`, meaning the output is put after the original contents.
+```
+echo -n "Hello" > hello-world
+echo " World" >> hello-world
+```
+The tool `echo` simply outputs the value you specify. The `-n` option specifies that echo should not output a trailing newline.
+
+To use the contents of the file `hello-world` again, we can use `cat`, which reads a file and prints it. Note that the `-w` option indicates `wc` to only count words.
+```
+cat hello-world | wc -w
+```
+
+You are directly passing the file to the standard input of `wc` without running an additional process. 
+```
+< hello-world wc -w
+```
+
+If the command-line tool also allows files to be specified as command-line arguments, you can also do the following for `wc`.
+```
+wc -w hello-world
+```
+
+### Working with Files
+
+If you need to move a file to a different directory, you can use `mv`. You can also rename files with `mv`.
+```
+mv hello-world data
+cd data
+mv hello-world old-file
+```
+
+You delete (or remove) it with `rm`. In case you want to remove an entire directory with all its contents, specify the `-r` option, which stands for recursive. 
+```
+rm old-file
+rm -r ~/book/ch02/data/old
+```
+
+In case you want to copy a file, use `cp`. This is useful for creating backups.
+```
+cp server.log server.log.bak
+```
+
+You can create directories using `mkdir`.
+```
+cd data
+mkdir logs
+```
+
+### Help!
+
+`man`, which is short for manual, contains information for most command-line tools. Not every command-line tool has a man page. For shell builtins, such as `cd`, you need to use the help command-line tool.
+```
+man cat | head -n 20
+help cd | head -n 20
+```
+
+Newer tools that can be used from the command line often lack a man page as well. In that case, your best bet is to invoke the tool with the `-h` or `--help` option.
+```
+jq --help
+```
+
+

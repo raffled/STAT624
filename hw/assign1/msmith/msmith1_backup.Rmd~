@@ -1,0 +1,220 @@
+Assignment 1 Parallel Computing.
+--------------------------------
+
+The `sir.adm` data set has five variables in addition to the patient `id`: `pneu` (pneumonia), `status`, `time`, `age`, and `sex`. See the help file for definitions.
+
+```{r}
+library(mvna)
+data(sir.adm)
+head(sir.adm)
+```
+
+Fine and Gray developed a Cox regression approach to model the subdistribution hazard function of a specific cause. The cumulative incidence function is given by:
+
+\[P_1(t; x) = 1 - exp\{-\Lambda_1(t)exp(x'\beta)\}\]
+where \(\Lambda_1(t)\) is an increasing function and \(\beta\) is a vector of regression coefficients. This model is implemented in the `crr()` function in the `cmprsk` package.
+
+```{r}
+library(cmprsk)
+# help(crr)
+attach(sir.adm)
+system.time(fit <- crr(time, status, pneu))
+summary(fit)
+```
+
+The objective is to estimate the coefficient for pneumonia by bootstrapping. Give the estimate and construct a confidence interval on the estimate in each case below. Also provide a histogram of the estimates in each approach. In each case do time testing for the basic fit.
+
+1. Implement the bootstrap model using the `snow` package with 3 workers. Do this using a socket connection. Determine if loadbalancing and/or I/O create a problem.
+
+```{r}
+library(boot)
+
+#non-parallel case
+# sir.adm.rg <- function(data,p) data[sample(1:nrow(sir.adm),replace=TRUE),]
+# sir.adm.coef <- function(data) crr(data$time, data$status, data$pneu)$coef
+# sir.adm.boot <- boot(sir.adm, sir.adm.coef, R = 900, sim = "parametric", ran.gen = sir.adm.rg)
+# est <- sir.adm.boot$t
+# mean(est)
+# hist(est,main="Histogram of Estimates", xlab="Estimate of coefficient")
+# boot.ci(test,  type = c("norm", "basic", "perc"), conf = 0.9)
+```
+
+```{r}
+library(snow)
+
+run1 <- function(...) 
+{
+  library(boot)
+  library(cmprsk)
+  sir.adm.rg <- function(data,p) data[sample(1:nrow(sir.adm),replace=TRUE),]
+  sir.adm.coef <- function(data) crr(data$time, data$status, data$pneu)$coef
+  boot(sir.adm, sir.adm.coef, R = 300, sim = "parametric", ran.gen = sir.adm.rg)
+}
+
+hosts <- c('localhost','localhost','localhost')
+cl <- makeCluster(hosts,type="SOCK")
+
+clusterSetupRNG(cl, type='RNGstream', seed=c(1,22,333))
+
+clusterExport(cl,"sir.adm")
+
+(tm1 <- snow.time(S1results <- do.call(c,clusterApply(cl, rep(300, 3), run1))))
+plot(tm1)
+
+stopCluster(cl)
+
+est <- S1results$t
+mean(est)
+boot.ci(S1results,  type = c("norm", "basic", "perc"), conf = 0.9)
+hist(est,main="Histogram of Estimates", xlab="Estimate of coefficient")
+```
+
+Now try using the `clusterApplyLB()` function from the snow package.
+
+```{r}
+cl <- makeCluster(hosts,type="SOCK")
+
+clusterSetupRNG(cl, type='RNGstream', seed=c(1,22,333))
+
+clusterExport(cl,"sir.adm")
+ignore <- clusterEvalQ(cl, {library(boot); NULL})
+ignore <- clusterEvalQ(cl, {library(cmprsk); NULL})
+
+(tm2 <- snow.time(S2results <- do.call(c,clusterApplyLB(cl, rep(300, 3), run1))))
+plot(tm2)
+
+stopCluster(cl)
+
+est <- S2results$t
+mean(est)
+boot.ci(S2results,  type = c("norm", "basic", "perc"), conf = 0.9)
+hist(est,main="Histogram of Estimates", xlab="Estimate of coefficient")
+```
+
+Finally, try using the function `parLapply()` from the snow package.
+
+```{r}
+cl <- makeCluster(hosts,type="SOCK")
+
+clusterSetupRNG(cl, type='RNGstream', seed=c(1,22,333))
+
+clusterExport(cl,"sir.adm")
+ignore <- clusterEvalQ(cl, {library(boot); NULL})
+ignore <- clusterEvalQ(cl, {library(cmprsk); NULL})
+
+(tm3 <- snow.time(S3results <- do.call(c,parLapply(cl, rep(300, 3), run1))))
+plot(tm3)
+
+stopCluster(cl)
+
+est <- S3results$t
+mean(est)
+boot.ci(S3results,  type = c("norm", "basic", "perc"), conf = 0.9)
+hist(est,main="Histogram of Estimates", xlab="Estimate of coefficient")
+```
+
+
+2. Implement the bootstrap model using the `multicore` package with 3 cores (workers). Explore the load-balancing issue.
+
+```{r}
+library(multicore)
+
+run1 <- function(...) 
+{
+  library(boot)
+  library(cmprsk)
+  #data(sir.adm)
+  sir.adm.rg <- function(data,p) data[sample(1:nrow(sir.adm),replace=TRUE),]
+  sir.adm.coef <- function(data) crr(data$time, data$status, data$pneu)$coef
+  boot(sir.adm, sir.adm.coef, R = 300, sim = "parametric", ran.gen = sir.adm.rg)
+}
+
+system.time(MCresults <- do.call(c,mclapply(seq_len(3), run1, mc.set.seed=TRUE)))
+
+est <- MCresults$t
+mean(est)
+boot.ci(MCresults,  type = c("norm", "basic", "perc"), conf = 0.9)
+hist(est,main="Histogram of Estimates", xlab="Estimate of coefficient")
+```
+
+Try without pre-scheduling
+
+```{r}
+system.time(MCresults <- do.call(c,mclapply(seq_len(3), run1, mc.set.seed=TRUE, mc.preschedule = FALSE)))
+```
+
+No prescheduling takes longer time.
+
+3. Implement the bootstrap model using the `parallel` package by both the `FORK` and `PSOCK` transports using 3 workers.
+
+```{r}
+library(parallel)
+
+run1 <- function(...) 
+{
+  library(boot)
+  library(cmprsk)
+  #data(sir.adm)
+  sir.adm.rg <- function(data,p) data[sample(1:nrow(sir.adm),replace=TRUE),]
+  sir.adm.coef <- function(data) crr(data$time, data$status, data$pneu)$coef
+  boot(sir.adm, sir.adm.coef, R = 300, sim = "parametric", ran.gen = sir.adm.rg)
+}
+
+cl <- makeCluster(3) #PSOCK type
+clusterSetRNGStream(cl, 123)
+
+clusterExport(cl,"sir.adm")
+#ignore <- clusterEvalQ(cl, {library(boot); NULL})
+#ignore <- clusterEvalQ(cl, {library(cmprsk); NULL})
+
+system.time(P1results <- do.call(c, parLapply(cl, seq_len(3), run1)))
+
+stopCluster(cl)
+
+est <- P1results$t
+mean(est)
+boot.ci(P1results,  type = c("norm", "basic", "perc"), conf = 0.9)
+hist(est,main="Histogram of Estimates", xlab="Estimate of coefficient")
+```
+
+Now try `FORK` transport
+
+```{r}
+library(parallel)
+
+run2 <- function(...) 
+{
+  #library(boot)
+  #library(cmprsk)
+  #data(sir.adm); sir.adm
+  sir.adm.rg <- function(data,p) data[sample(1:nrow(sir.adm),replace=TRUE),]
+  sir.adm.coef <- function(data) crr(data$time, data$status, data$pneu)$coef
+  boot(sir.adm, sir.adm.coef, R = 300, sim = "parametric", ran.gen = sir.adm.rg)
+}
+
+#cl <- parallel::makeCluster(3, type="FORK")
+cl <- makeForkCluster(3)
+clusterSetRNGStream(cl, 123)
+
+clusterExport(cl,"sir.adm")
+
+system.time(P2results <- do.call(c, parLapply(cl, seq_len(3), run1)))
+
+stopCluster(cl)
+
+est <- P2results$t
+mean(est)
+boot.ci(P2results,  type = c("norm", "basic", "perc"), conf = 0.9)
+hist(est,main="Histogram of Estimates", xlab="Estimate of coefficient")
+detach("package:parallel", unload=T)
+```
+
+Using the `FORK` transport the execution time is slower??
+
+4. Compare the execution times (adjusted for the number of samples) for these approaches in 1--4 above to each other and to the non-parallel code given above and discuss.
+ 
+
+
+
+
+

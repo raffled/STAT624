@@ -1,0 +1,142 @@
+The mclapply Function
+---------------------
+
+### How It Works
+
+multicore:  
+* runs on Posix-based multiprocessor and multicore systems  
+* uses the fork() system call  
+* is intended for embarrassingly parallel applications  
+* implements a parallel lapply() operation  
+
+### Working with It
+
+#### The mclapply Function
+
+The `mclapply()` function is a replacement for `lapply()`
+
+
+```{r}
+library(parallel)
+library(MASS)
+result100 <- kmeans(Boston, 4, nstart=100)
+results <- mclapply(rep(25, 8), function(nstart) kmeans(Boston, 4, nstart=nstart))
+i <- sapply(results, function(result) result$tot.withinss)
+i
+result25 <- results[[which.min(i)]]
+result25
+```
+#### The mc.cores Option
+
+`mclapply` automatically starts workers using `fork()`. By default, the number of workers is the number of cores on the computer. The workers inherit the functions, variables, and environments of the master process making explicit worker initialization unnecessary (unlike snow). `fork()` is very fast since since it doesn't copy process data until it is needed, called _copy-on-write_. Forking is done every time `mclapply()` is called giving workers a virtual copy of the master environment at the time of execution of `mclapply()`.
+
+The number of cores can be set by the `mc.cores` option or the `options()` function.
+
+```{r}
+unique(unlist(mclapply(1:100, function(i) Sys.getpid(), mc.cores = 8)))
+options(cores = 8)
+getOption("cores")
+unique(unlist(mclapply(1:100, function(i) Sys.getpid())))
+```
+
+#### The mc.set.seed Option
+
+If `mc.set.seed` is set to `TRUE`, `mclapply()` will seed each worker with a different value when created.
+
+```{r}
+mclapply(1:3, function(i) rnorm(3), mc.cores = 8, mc.set.seed = FALSE)
+rnorm(1)
+mclapply(1:3, function(i) rnorm(3), mc.cores = 8, mc.set.seed = FALSE)
+set.seed(7777442)
+mclapply(1:3, function(i) rnorm(3), mc.cores = 8, mc.set.seed = TRUE)
+```
+
+#### Load Balancing with mclapply
+
+By default, `mclapply()` works like snow's `parLapply()`, i.e., it preschedules the work by dividing it into as many tasks as cores.
+
+Balance the work of workers by setting `mc.preschedule` to `FALSE`. This makes `mclapply()` work like snow's `clusterApplyLB()`. Set to `FALSE` if the tasks are both long and varying in length.
+
+```{r}
+set.seed(93564990)
+sleeptime <- abs(rnorm(5, 10, 10))
+system.time(mclapply(sleeptime, Sys.sleep, mc.cores = 8))
+system.time(mclapply(sleeptime, Sys.sleep, mc.cores = 8, mc.preschedule = FALSE))
+```
+#### The pvec Function
+
+A high-level fumction to execute vector functions in parallel. It is similar to the `parVapply()` function developed in the snow chapter.
+
+```{r}
+x <- 1:10
+pvec(x, "^", 1/3)
+```
+The worker function is executed on subvectors of the input vector. `mc.set.seed` and `mc.cores` are supported arguments.
+
+### The parallet and collect Functions
+
+```{r}
+fun1 <- function() {Sys.sleep(10); 1}
+fun2 <- function() {Sys.sleep(5); 2}
+fun3 <- function() {Sys.sleep(1); 3}
+f1 <- parallel(fun1())
+f2 <- parallel(fun2())
+f3 <- parallel(fun3())
+collect(list(f1, f2, f3))
+```
+
+`parallel()` is like a submit operation and `collect()` is like a wait operation.
+
+### Using collect Options
+
+wait and timeout are two options that determine how long collect waits for jobs to finish. If wait=TRUE, then collect waits until all jobs are finished. If `wait=FALSE`, then collect waits up to timeout seconds.
+
+```{r}
+f1 <- parallel(fun1())
+f2 <- parallel(fun2())
+f3 <- parallel(fun3())
+collect(list(f1, f2, f3), wait=FALSE)
+Sys.sleep(15)
+collect(list(f1, f2, f3), wait=FALSE)
+collect(list(f1, f2, f3), wait=FALSE)
+collect(list(f1, f2, f3), wait=FALSE)
+```
+
+```{r}
+f1 <- parallel(fun1())
+f2 <- parallel(fun2())
+f3 <- parallel(fun3())
+collect(list(f1, f2, f3), wait=FALSE, timeout=1000000)
+collect(list(f1, f2, f3), wait=FALSE, timeout=1000000)
+collect(list(f1, f2, f3), wait=FALSE, timeout=1000000)
+collect(list(f1, f2, f3), wait=FALSE, timeout=1000000)
+collect(list(f1, f2, f3), wait=FALSE, timeout=1000000)
+collect(list(f1, f2, f3), wait=FALSE, timeout=1000000)
+collect(list(f1, f2, f3), wait=FALSE, timeout=1000000)
+```
+
+### Parallel Random Generators
+
+No built-in support in `multicore` for `rlecuyer` or `rsprng`. Since high-level functions `fork`, you can't initialize workers once and use them repeatedly.
+
+```{r}
+library(snow)
+nw <- 8
+seed <- 7777442
+kind <- 0
+para <- 0
+f1 <- parallel({
+    initSprngNode(0, nw, seed, kind, para)
+    rnorm(1)
+})
+f2 <- parallel({
+    initSprngNode(1, nw, seed, kind, para)
+    rnorm(1)
+})
+f3 <- parallel({
+    initSprngNode(2, nw, seed, kind, para)
+    rnorm(1)
+})
+unlist(collect(list(f1, f2, f3)), use.names = FALSE)
+```
+

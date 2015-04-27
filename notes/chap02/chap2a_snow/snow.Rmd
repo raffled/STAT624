@@ -1,0 +1,308 @@
+---
+title: 'Chap 2: snow'
+author: "jharner"
+date: "January 25, 2015"
+output: html_document
+---
+
+## Quick Look
+
+Use `snow` on a Linux cluster to run an R script faster, e.g., to run
+a Monte Carlo simulation.  This fits well into a traditional cluster
+environment, and is able to take advantage of high-speed communication
+networks, such as  InfiniBand, using MPI. 
+
+## Setting Up
+
+`snow` can be installed by:
+```{r}
+install.packages("snow")
+```
+To use snow with MPI, you will also need to install the `Rmpi`
+package. Unfortunately, installing Rmpi is a frequent cause of
+problems because it has an external dependency on MPI. 
+
+## How It Works
+
+`snow` provides support for easily executing R functions in parallel. 
+
+snow:
+
+* executes R functions, e.g., `lapply()`in parallel  
+* uses a master/worker architecture  
+* uses different transport mechanisms between the master and workers  
+  * socket connections (popular on multicore computers)   
+  * MPI or PVM (popular on Linux clusters)  
+  * NetWorkSpaces  
+The socket transport doesn’t require any additional packages, and is
+the most portable. MPI is supported via the `Rmpi` package, PVM via
+`rpvm`, and NetWorkSpaces via `nws`.  
+
+`snow` is primarily intended for clusters with MPI.
+
+## Working with It
+
+In order to execute any functions in parallel with `snow`, you must
+first create a cluster object. The cluster object is used to interact
+with the cluster workers, and is passed as the first argument to many
+of the snow functions. You can create different types of cluster
+objects, depending on the transport mechanism that you wish to use. 
+
+The basic cluster creation function is `makeCluster()` which can
+create any type of cluster. 
+```{r}
+library(snow)
+hosts <- rep("localhost", 8)
+cl <- makeCluster(hosts, type="SOCK")
+cl
+stopCluster(cl)
+```
+The first argument of makeCluster is the *cluster specification* and
+the second is the *cluster type*. The type argument can be: SOCK, MPI,
+PVM, and NWS. 
+
+Socket clusters also allow you to specify the worker machines as a
+character vector. The socket transport launches each of these workers
+via the `ssh` command unless the name is `localhost`, in which case
+`makeCluster()` starts the worker itself. 
+
+### Parallel K-Means
+
+K-Means is a clustering algorithm that partitions rows of a dataset
+into $k$ clusters. It’s an iterative algorithm, since it starts with a
+guess of the location for each of the cluster centers, and gradually
+improves the center locations until it converges on a solution. 
+
+R includes a function for performing K-Means clustering in the stats
+package: the `kmeans()` function. One way of using the `kmeans()`
+function is to specify the number of cluster centers, and `kmeans()`
+will pick the starting points for the centers by randomly selecting
+that number of rows from your dataset. After it iterates to a
+solution, it computes a value called the *total within-cluster sum of
+squares*. It then selects another set of rows for the starting points,
+and repeats this process in an attempt to find a solution with a
+smallest *total within-cluster sum of squares*. 
+
+```{r}
+library(MASS)
+system.time(result <- kmeans(Boston, 4, nstart=100))
+```
+
+Now use this technique using the `lapply()` function to make sure it works.
+```{r}
+system.time(results <- lapply(rep(25, 4), function(nstart) kmeans(Boston, 4, nstart=nstart)))
+i <- sapply(results, function(result) result$tot.withinss)
+i
+result <- results[[which.min(i)]]
+result
+```
+We used a vector of four 25s to specify the `nstart` argument in order
+to get equivalent results to using 100 in a single call to
+`kmeans()`. 
+
+`snow` includes a number of functions that we could use, including
+`clusterApply()`, `clusterApplyLB()`, and `parLapply()`. For this
+example, we’ll use `clusterApply()`. You call it exactly the same as
+`lapply()`, except that it takes a snow cluster object as the firstnp
+argument. We also need to load `MASS` on the workers, rather than  on
+the master, since it’s the workers that use the “Boston” dataset. 
+```{r}
+cl <- makeCluster(hosts, type="SOCK")
+ignore <- clusterEvalQ(cl, {library(MASS); NULL})
+system.time(results <- clusterApply(cl, rep(25, 4),
+                        function(nstart) kmeans(Boston, 4, nstart=nstart)))
+i <- sapply(results, function(result) result$tot.withinss)
+result <- results[[which.min(i)]]
+result
+```
+`clusterEvalQ()` takes two arguments: the cluster object, and an
+expression that is evaluated on each of the workers. Returning `NULL`
+guarantees that we don’t accidentally send unnecessary data transfer
+back to the master.
+
+As you can see, the snow version isn’t that much different than the
+`lapply()` version. Most of the work was done in converting it to use
+`lapply()`. Usually the biggest problem in converting from `lapply()`
+to one of the parallel operations is handling the data properly and
+efficiently. 
+
+### Installing Workers
+
+`clusterEvalQ()` can initialize the cluster workers by loading a
+package on each of them. It’s great for executing a simple expression
+on the cluster workers, but it doesn’t allow you to pass any kind of
+parameters to the expression. Also, although you can use it to execute
+a function, it won’t send that function to the worker first. 
+
+`clusterCall()` takes a snow cluster object, a worker function, and
+any number of arguments to pass to the function. It simply calls the
+function with the specified arguments on each of the cluster workers,
+and returns the results as a list.  
+
+We can use `clusterCall()` to load the `MASS` package on the cluster workers.
+```{r}
+clusterCall(cl, function() { library(MASS); NULL })
+```
+
+The following will load several packages specified by a character vector:
+```{r}
+worker.init <- function(packages) {
+  for (p in packages) {
+      library(p, character.only=TRUE)
+  }
+  NULL
+}
+
+clusterCall(cl, worker.init, c('MASS', 'boot'))
+```
+Setting the character.only argument to `TRUE` makes `library()`
+interpret the argument as a character variable. If we didn’t do that,
+`library()` would attempt to load a package named `p` repeatedly. 
+
+The `clusterApply()` function is also useful for initializing the
+cluster workers since it can send different data to the initialization
+function for each worker. The following creates a global variable on
+each of the cluster workers that can be used as a unique worker ID: 
+```{r}
+clusterApply(cl, seq(along=cl), function(id) WORKER.ID <<- id)
+stopCluster(cl)
+```
+
+### Load Balancing with clusterApplyLB
+
+`clusterApply()` schedules tasks in a round-robin way;
+`clusterApplyLB()` sends tasks to workers as they complete their
+previous task. 
+
+`clusterApply()` pushes tasks to the workers, while `clusterApplyLB()`
+lets the workers pull tasks as needed. That can be more efficient if
+some tasks take longer than others, or if some cluster workers are
+slower. 
+
+To demonstrate clusterApplyLB(), we’ll execute Sys.sleep() on the
+workers, giving us complete control over the task lengths. Since our
+real interest in using cluster ApplyLB() is to improve performance,
+we’ll use snow.time() to gather timing information about the overall
+execution.‡ We will also use snow.time()’s plotting capability to
+visualize the task execution on the workers: 
+```{r}
+cl <- makeCluster(hosts, type="SOCK")
+sleeptime <- abs(rnorm(10))
+tm <- snow.time(clusterApplyLB(cl, sleeptime, Sys.sleep))
+plot(tm)
+stopCluster(cl)
+```
+
+The same problem with `clusterApply()`:
+```{r}
+cl <- makeCluster(hosts, type="SOCK")
+set.seed(7777442)
+sleeptime <- abs(rnorm(10))
+tm <- snow.time(clusterApply(cl, sleeptime, Sys.sleep))
+plot(tm)
+stopCluster(cl)
+```
+`clusterApply()` is much less efficient than `clusterApplyLB()`.
+### Task Chunking with parLapply
+
+`parLapply()` is a high-level snow function, that is actually a deceptively simple function wrapping an invocation of `clusterApply()`:
+```{r}
+tm <- snow.time(parLapply(cl, sleeptime, Sys.sleep))
+plot(tm)
+```
+
+Splits x into subvectors and executes them on the workers using
+`lapply()`. It is a type of prescheduling, which results in fewer I/O
+operations between the master and workers. This can result in savings
+if the length of `x` is large. 
+
+If the length of `x` is already equal to the number of workers, then
+`parLapply()` has no advantage. The length of `x` is often very large
+and completely unrelated to the number of workers in your cluster. 
+
+`parLapply()`’s work scheduling is such that it is much more efficient
+than `clusterApply()` if you have many more tasks than workers, and
+one or more large, additional arguments to pass to `parLapply()`.  
+
+```{r}
+cl <- makeCluster(hosts, type="SOCK")
+bigsleep <- function(sleeptime, mat) Sys.sleep(sleeptime)
+bigmatrix <- matrix(0, 2000, 2000)
+sleeptime <- rep(1, 100)
+tm <- snow.time(clusterApply(cl, sleeptime, bigsleep, bigmatrix))
+plot(tm)
+```
+`clusterApply()` is sending `bigmatrix` to the workers with every
+task. This isn't very efficient: there are many sends and receives
+between the master and the workers, resulting in relatively big gaps
+between the compute operations on the cluster workers. The gaps aren’t
+due to load imbalance as we saw before: they’re due to I/O time.  
+
+Now using `parLapply()`:
+```{r}
+tm <- snow.time(parLapply(cl, sleeptime, bigsleep, bigmatrix))
+plot(tm)
+```
+
+If you are sending large objects in `x`, then `parLapply()` does not help.
+
+### Vectorizing with clusterSplit
+
+`parLapply()` executes a user-supplied function for each element of
+`x` just like `clusterApply()`. But what if we want the function to
+operate on subvectors of `x`? 
+
+`parVapply()`:
+* splits x with `clusterSplit()`;
+* executes the user function on each piece using `clusterApply()`;
+* combines the results using `do.call()` and `c()`.
+
+```{r}
+clusterSplit(cl, 1:30)
+parVapply <- function(cl, x, fun, ...) {
+  do.call("c", clusterApply(cl, clusterSplit(cl, x), fun, ...))
+}
+parVapply(cl, 1:10, "^", 1/3)
+```
+
+### Load Balancing Redux
+
+Suppose we need load balancing; the number of tasks is large; and the
+task objects are large. `clusterApplyLB()` solves the first and
+`parLapply()` solves the last two. 
+
+We next define `parLapplyLB()` which attemps to solve all three issues:
+
+```{r}
+parLapplyLB <- function(cl, x, fun, ...) {
+  clusterCall(cl, LB.init, fun, ...)
+  r <- clusterApplyLB(cl, x, LB.worker)
+  clusterEvalQ(cl, rm('.LB.fun', '.LB.args', pos=globalenv()))
+}
+LB.init <- function(fun, ...) {
+  assign('.LB.fun', fun, pos=globalenv())
+  assign('.LB.args', list(...), pos=globalenv())
+  NULL
+}
+LB.worker <- function(x) {
+  do.call('.LB.fun', c(list(x), .LB.args))
+}
+```
+`parLapplyLB()` initializes the workers using `clusterCall()`,
+executes the tasks with `clusterApplyLB()`, cleans up the global
+environment of the cluster workers with `clusterEvalQ()`, and finally
+returns the task results. 
+
+```{r}
+bigsleep <- function(sleeptime, mat) Sys.sleep(sleeptime)
+bigmatrix <- matrix(0, 2000, 2000)
+sleeptime <- rep(1, 100)
+tm <- snow.time(clusterApplyLB(cl, sleeptime, bigsleep, bigmatrix))
+plot(tm)
+tm <- snow.time(parLapplyLB(cl, sleeptime, bigsleep, bigmatrix))
+plot(tm)
+```
+Notice that the first task on each worker has a short execution time,
+but a long task send time, as seen by the slope of the first four
+lines between the master (node 0) and the workers (nodes 1-4). 
+

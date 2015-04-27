@@ -1,0 +1,104 @@
+R + Hadoop
+----------
+
+## Working with It
+
+
+
+### The Java API: Binary Input and Output
+
+Processing whole-file data (text or binary) with Hadoop, requires you to pack those files into a `SequenceFile` archive
+
+#### Situation
+
+* Perform feature extraction on a series of image files, but using input as pointers to the data is too fragile.
+* Want the job to be self-contained, from a Hadoop perspective.
+
+#### The Code
+
+The streaming API cannot handle SequenceFiles but the Java API can. You can use the Java API to extract data from the SequenceFile input, write it to a filename, and launch an R script that operates on that file.
+
+We will use Hadoop for one-stage parallel execution, i.e., a Map-only job.
+
+Hadoop Java code is typically compiled into a JAR that has at least two classes: the *driver* that configures the job and the *mapper* that is run for a Map task. (Jobs that have a Reduce step will include a *reducer* class.)
+
+Comments for the Examaple 6.3 `Driver.java`  
+
+1. `Driver` extends the Hadoop base class `Configured` and implements the interface `Tool`. The combined effect is that Driver gets some convenience methods for setting up the job and Hadoop will take care of parsing Hadoop-specific options for us. 
+
+2. `Ch6Ex3Mapper` extends the `Mapper` class for the Map task. As this is a Map-only job, there is no need to set a class for Reduce tasks. Hadoop defaults to using its `no-op` Reducer class
+
+3. `Tool` and `Configured` simplify command line processing. Here, the `arg[]` array contains all command line elements after the general Hadoop options. The first one is the input path, the second is the output path.
+
+4. Hadoop will expect all job input to be in SequenceFiles.
+
+5. The Reduce phase also emits a series of key/value pairs. The key/value pairs will be plain-text.
+
+6. Configuration properties are set using `-D` to ask Hadoop to compress the output, etc., but you can embed the options in the Java code.
+
+Comments for the Examaple 6.3 `Ch6Ex3Mapper.java`
+
+1. The `map()` operation will expect a text string and binary data as the input key/value pair, and will emit text for the output key/value pair. Please note that the `SequenceFile` must therefore use a `Text` object as the key and a `BytesWritable` as the value.
+
+2. The code recycles the `Text` object used for the output value and also a `StringBuilder` that to holds the R script’s output.
+
+3. The code performs some cleanup on those instance variables each time it enters `map()`.
+
+4. Write the binary data to a file on-disk that R can access.
+
+5. Build a command line to run R. Notice that the final element is the input key, which is the name of the image file to process.
+
+6. This line launches R. The code uses `ProcessBuilder`, instead of `Runtime.exec()`, in order to combine the R script’s standard output and standard error.
+
+7. Collect the R script’s output. A successful run of `helper.R` yields a single line of output, so that’s all the code fetches. 
+
+8. Package up the results to send on to the Reduce step. The input key (the image file’s name) is also the output key, in order to identify each image’s results in the job’s output.
+
+This job used a `SequenceFile` for input, it’s just as easy to use a `SequenceFile` for output. 
+
+* Change the Driver class to specify `SequenceFile` output, and also change the Mapper’s class definition and `map()` method to `BytesWritable` (binary) output.
+
+Use standard Java I/O to read the binary output file into a `byte[]` array and put those bytes into the `BytesWritable`.
+
+The R script, `helper.R`, which is invoked by the Java code.
+```
+dataFile <- commandArgs(trailingOnly=TRUE)
+result <- imageFeatureExtraction( dataFile )
+output.value <- paste( dataFile , result , sep="\t" )
+```
+
+1. `commandArgs()` fetches the arguments passed to the R script, which in this case is the image’s file name.
+
+2. The `imageFeatureExtraction()` function works on the provided file.
+
+#### Running the Hadoop job
+
+If the Hadoop code is in a JAR named `launch-R.jar` and the input images are in a `SequenceFile` named `images-sample.seq` and assuming the environment variables defined above, you can launch the job as follows:
+```
+${HADOOP_COMMAND} jar launch-R.jar -files helper.R \
+  /tmp/images-sample.seq \
+  /tmp/hadoop-out
+```
+This command line is shorter than the streaming command lines, mostly because several options are set in the driver class.
+
+Note: When using the Java API, you have to use Hadoop’s Distributed Cache (the `-files` flag) to copy `helper.R` to the cluster.
+
+If you’re testing the job on your workstation, in Hadoop’s "local” (single-workstation) mode, you’ll want to keep two ideas in mind:
+
+* Distributed Cache doesn’t work in local mode. You’ll want to launch the Hadoop command from the directory where `helper.R` lives such that the Mapper class can find it.
+
+* The Hadoop job will treat the current directory as its runtime directory. That means the images extracted in the Mapper will be written to your current directory.
+
+#### Reviewing the output
+
+If your R code generates binary output, such as charts, you can write that as a   `SequenceFile`: specify `SequenceFileOutputFormat` as the output, and have your Java code write the file’s data to a `BytesWritable` object.
+
+#### Caveats
+
+This method keeps the entire job within Hadoop’s walls: unlike the previous example, you’re protected from machine crashes, network failures, and Hadoop’s speculative execution. 
+
+
+ 
+
+
+

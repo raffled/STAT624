@@ -1,0 +1,72 @@
+---
+title: 'Chap 1: Introduction'
+author: "jharner"
+date: "January 14, 2015"
+output: html_document
+---
+
+## Overview
+
+## Data Science Is OSEMN
+
+Data science consists of the following five steps:   
+1. obtaining data;
+
+> The obtained data will most likely be in either plain text, CSV, JSON, or HTML/XML format. 
+
+2. scrubbing data;  
+
+> The obtained data has missing values, inconsistencies, errors, weird characters, or uninteresting columns. You will need to scrub, or clean, the data before you can do anything interesting with it.
+
+3. exploring data; 
+
+> Once you have scrubbed your data, you are ready to explore it.
+
+4. modeling data;  
+
+> Techniques to create a model include clustering, classification, regression, and dimensionality reduction. 
+
+5. interpreting data.
+
+> Perhaps most important step in the OSEMN model is interpreting data
+
+Together, these steps form the OSEMN model (which is pronounced as awesome). 
+
+## What Is the Command Line?
+
+The terminal is the program that enables you to interact with the shell. It is the shell that executes the commands we type in. (On both Ubuntu and Mac OS X, the default shell is Bash.)
+
+Once you are in the toolbox, type at the prompt:
+```
+whoami
+hostname
+date
+echo 'The command line is awesome!' | cowsay
+```
+
+The dollar sign ($) is called the prompt. The prompt may show more information, namely the username (vagrant), the hostname (data-science-toolbox), and the current working directory (~).
+
+## Why Data Science at the Command Line?
+
+### The Command Line Is Agile
+
+1. The command line provides a read-eval-print-loop (REPL). This means that you type in a command, press <Enter>, and the command is evaluated immediately. A REPL is often much more convenient for doing data science than the edit-compile-run-debug cycle associated with scripts, large programs, and, say, Hadoop jobs.
+
+2. The command line is very close to the filesystem.
+
+### The Command Line Is Augmenting
+
+Whatever technology your data science workflow currently includes (whether it’s R, IPython, or Hadoop), you should know that we’re not suggesting you abandon that workflow. Instead, the command line is presented here as an augmenting technology that amplifies the technologies you’re currently employing.
+
+### The Command Line Is Scalable
+
+Everything that you type manually on the command line, can also be automated through scripts and tools. Because the command line is automatable, it becomes scalable and repeatable. It is not straightforward to automate pointing and clicking, which makes a GUI a less suitable environment for doing scalable and repeatable data science.
+
+### The Command Line Is Extensible
+
+Command-line tools to be written in many different programming languages. These command-line tools can work together, which makes the command line very flexible. You can also create your own tools.
+
+### The Command Line Is Ubiquitous
+
+Because the command line comes with any Unix-like operating system, including Ubuntu and Mac OS X.
+

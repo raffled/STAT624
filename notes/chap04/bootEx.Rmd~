@@ -1,0 +1,77 @@
+---
+title: "Boot Example"
+author: "jharner"
+date: "February 8, 2015"
+output: html_document
+---
+
+Bootstrapping is often used as an example of easy parallelization, and some methods of producing confidence intervals require many thousands of bootstrap samples. As from version 1.3-1 the package itself has parallel support within its main functions, but we illustrate how to use the original (serial) functions in parallel computations.
+
+We consider two examples using the cd4 dataset from package boot where the interest is in the correlation between before and after measurements. The first is a straight simulation, often called a parametric bootstrap. The non-parallel form is:
+```{r}
+library(boot)
+cd4.rg <- function(data, mle) MASS::mvrnorm(nrow(data), mle$m, mle$v)
+cd4.mle <- list(m = colMeans(cd4), v = var(cd4))
+cd4.boot <- boot(cd4, corr, R = 999, sim = "parametric",
+                 ran.gen = cd4.rg, mle = cd4.mle)
+boot.ci(cd4.boot,  type = c("norm", "basic", "perc"),
+        conf = 0.9, h = atanh, hinv = tanh)
+```
+
+To do this with `mclapply` we need to break this into separate runs, and we will illustrate two runs of 500 simulations each:
+```{r}
+library(parallel)
+cd4.rg <- function(data, mle) MASS::mvrnorm(nrow(data), mle$m, mle$v)
+cd4.mle <- list(m = colMeans(cd4), v = var(cd4))
+run1 <- function(...) boot(cd4, corr, R = 500, sim = "parametric",
+                           ran.gen = cd4.rg, mle = cd4.mle)
+mc <- detectCores()
+## To make this reproducible:
+set.seed(123, "L'Ecuyer")
+cd4.boot <- do.call(c, mclapply(seq_len(mc), run1) )
+boot.ci(cd4.boot, type = c("norm", "basic", "perc"), conf = 0.9,
+        h = atanh, hinv = tanh)
+```
+
+To run this with `parLapply` we could take a similar approach by:
+```{r}
+library(parallel)
+library(boot)
+run1 <- function(...) {
+  library(boot)
+  cd4.rg <- function(data, mle) MASS::mvrnorm(nrow(data), mle$m, mle$v)
+  cd4.mle <- list(m = colMeans(cd4), v = var(cd4))
+  boot(cd4, corr, R = 500, sim = "parametric",
+       ran.gen = cd4.rg, mle = cd4.mle)
+  }
+
+cl <- makeCluster(mc)
+## make this reproducible
+clusterSetRNGStream(cl, 123)
+cd4.boot <- do.call(c, parLapply(cl, seq_len(mc), run1) )
+boot.ci(cd4.boot, type = c("norm", "basic", "perc"),
+        conf = 0.9, h = atanh, hinv = tanh)
+stopCluster(cl)
+```
+
+Note that whereas with `mclapply` all the packages and objects we use are automatically available on the workers, this is not in general the case with the `parLapply` approach. There is often a delicate choice of where to do the computations: for example we could compute `cd4.mle` on the workers (as above) or on the master and send the value to the workers. We illustrate the latter by the following code:
+```{r}
+cl <- makeCluster(mc)
+cd4.rg <- function(data, mle) MASS::mvrnorm(nrow(data), mle$m, mle$v)
+cd4.mle <- list(m = colMeans(cd4), v = var(cd4))
+clusterExport(cl, c("cd4.rg", "cd4.mle"))
+junk <- clusterEvalQ(cl, library(boot)) # discard result
+clusterSetRNGStream(cl, 123)
+res <- clusterEvalQ(cl, boot(cd4, corr, R = 500,
+                             sim = "parametric", ran.gen = cd4.rg, mle = cd4.mle))
+library(boot) # needed for c() method on master
+cd4.boot <- do.call(c, res)
+boot.ci(cd4.boot,  type = c("norm", "basic", "perc"), conf = 0.9,
+        h = atanh, hinv = tanh)
+stopCluster(cl)
+```
+
+
+
+
+

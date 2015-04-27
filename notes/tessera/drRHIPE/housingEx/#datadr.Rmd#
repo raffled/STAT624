@@ -1,0 +1,191 @@
+---
+title: 'datadr: housing example'
+author: "jharner"
+date: "February 24, 2015"
+output: html_document
+---
+
+We will use as an example a data set consisting of the median list and sold price of homes in the United States, aggregated by county and month from 2008 to early 2014. 
+
+#### Package installation
+```{r, eval=FALSE}
+# install package with housing data
+devtools::install_github("hafen/housingData")
+```
+
+#### Environment setup
+
+Load the packages and look at the housing data
+```{r}
+library(housingData)
+class(housing)
+library(datadr)
+library(trelliscope)
+
+# look at housing data
+head(housing)
+```
+
+#### Division by county and state
+
+Divide the data is by county name and state to be able to study how home prices have evolved over time within county. We can do this with a call to `divide()`:
+```{r}
+# divide by county and state
+byCounty <- divide(housing, by = c("county", "state"), update = TRUE)
+class(byCounty)
+```
+
+Our `byCounty` object is now a distributed data frame (ddf). We can see some of its attributes by printing the object:
+```{r}
+byCounty
+```
+
+There are 2883 counties, and we can access various attributes by calling methods such as `summary()`. The `update = TRUE` that we added to `divide()` provided some of these attributes. 
+```{r}
+# look at summaries
+summary(byCounty)
+```
+Since datadr knows that byCounty is a ddf, and we set update = TRUE, after the division operation it computed global summary statistics for each of the variables.
+
+# look at overall distribution of median list price
+
+`datadr` can compute a more meaningful global summary in a division-independent way with `drQuantile()`. For example, let's look at quantiles for the median list price:
+```{r}
+priceQ <- drQuantile(byCounty, var = "medListPriceSqft")
+xyplot(q ~ fval, data = priceQ, scales = list(y = list(log = 10)))
+```
+
+What does a subset of byCounty look like? `byCounty` is a list of key-value pairs. Essentially, the collection of subsets can be thought of as a large list, where each list element has a key and a value. To look at the first key-value pair:
+```{r}
+byCounty[[1]]
+```
+
+#### Applying an analytic method and recombination
+
+Apply an analytic method to each subset of our data and recombine the result. Let's look at is the slope coefficient of a linear model applied to list prices vs. time for each county.
+
+We can create a function that operates on an input data frame `x` that does this:
+```{r}
+# slope of fitted line of list price for each county
+lmCoef <- function(x)
+  coef(lm(medListPriceSqft ~ time, data = x))[2]
+```
+
+Apply this transformation to each subset in our data with `addTransform()`:
+```{r}
+# apply lmCoef to each subset
+byCountySlope <- addTransform(byCounty, lmCoef)
+class(byCountySlope)
+```
+
+This applies `lmCoef()` to each subset in a deferred fashion, meaning that for all intents and purposes we can think of `byCountySlope` as a distributed data object that contains the result of `lmCoef()` being applied to each subset. But computation is deffered until another data operation is applied to `byCountySlope`, such as a recombination, which we will do next.
+
+When we look at a subset of byCountySlope, we see what the result will look like:
+``` {r}
+# look at a subset of transformed data
+byCountySlope[[1]]
+```
+
+recombine the slopes into a single data frame. This can be done with the `recombine()` function, using the `combRbind` combiner:
+```{r}
+# recombine all slopes into a single data frame
+countySlopes <- recombine(byCountySlope, combRbind)
+head(countySlopes)
+```
+
+```{r}
+plot(sort(countySlopes$val))
+```
+
+#### Joining other data sets
+
+There are data operations beyond `divide()` and `recombine()`, e.g., `drJoin()`. Suppose we have multiple related data sources. For example, we have geolocation data for the county centroids. `drJoin()` will allow us to join multiple data sets by key.
+
+We have a data set, `geoCounty`, part of the housingData package, that we want to divide in the same way as we divided the housing data:
+```{r}
+head(geoCounty)
+geo <- divide(geoCounty, by = c("county", "state"))
+geo[[1]]
+```
+
+This division gives us a divided data set with the same keys as `byCounty`. So we can join this with byCounty:
+```{r}
+byCountyGeo <- drJoin(housing = byCounty, geo = geo)
+class(byCountyGeo)
+```
+
+This providet us with a new ddo (not a data frame anymore) where for each key, the value is a list with a data frame housing holding the time series data and a data frame geo holding the geographic data. We can see the structure of this for a subset with:
+```{r}
+str(byCountyGeo[[1]])
+```
+
+### Trelliscope display
+
+Trelliscope display is like a Trellis display, or ggplot with faceting, or small multiple plot, or whatever you are used to calling the action of breaking a set of data into pieces and applying a plot to each piece and then arranging those plots in a grid and looking at them. With Trelliscope, we are able to create such displays on data with a very large number of subsets and view them in an interactive and meaningful way.
+
+#### Setting up a visualization database
+
+For a Trelliscope display, connect to a "visualization database" (VDB), which is a directory on our computer where we are going to organize all of the information about our displays (we create many over the course of an analysis). Typically we will set up a single VDB for each project we are working on. We can do this with the `vdbConn()` function:
+```{r}
+# make a time series trelliscope display
+vdbConn("housingjunk/vdb", autoYes = TRUE)
+```
+This connects to a directory called `vdb` relative to our current working directory. R holds this connection in its global options so that subsequent calls will know where to put things without explicitly specifying the connection each time.
+
+#### Creating a panel function
+
+To create a Trelliscope display, we need to first specify a panel function, which specifies what to plot for each subset. It takes as input either a key-value pair or just a value, depending on whether the function has two arguments or one.
+
+Here is a panel function that takes a value and creates a lattice `xyplot` of list and sold price over time:
+```{r}
+# make and test panel function
+timePanel <- function(x)
+  xyplot(medListPriceSqft + medSoldPriceSqft ~ time,
+    data = x, auto.key = TRUE, ylab = "$ / Sq. Ft.")
+timePanel(byCounty[[20]]$value)
+timePanel(byCounty[[1]][[2]])
+```
+
+#### Creating a cognostics function
+
+Specify a cognostics function for each subset. A cognostic is a metric that tells us an interesting attribute about a subset of data, and we can use cognostics to have more worthwhile interactions with all of the panels in the display. A cognostic function needs to return a list of metrics:
+
+```{r}
+# make and test cognostics function
+priceCog <- function(x) { list(
+  slope = cog(lmCoef(x), desc = "list price slope"),
+  meanList = cogMean(x$medListPriceSqft),
+  listRange = cogRange(x$medListPriceSqft),
+  nObs = cog(sum(!is.na(x$medListPriceSqft)), 
+  desc = "number of non-NA list prices")
+)}
+```
+
+We use the `cog()` function to wrap our metrics so that we can provide a description for the cognostic, and we also employ special cognostics functions `cogMean()` and `cogRange()` to compute mean and range with a default description.
+
+We should test the cognostics function on a subset:
+```{r}
+priceCog(byCounty[[1]]$value)
+```
+
+#### Making the display
+
+Create a Trelliscope display by sending our data, our panel function, and our cognostics function to `makeDisplay()`:
+
+```{r, eval=FALSE}
+# add display panel and cog function to vdb
+makeDisplay(byCounty,
+  name = "list_sold_vs_time",
+  desc = "List and sold price over time",
+  panelFn = timePanel, cogFn = priceCog,
+  width = 400, height = 400,
+  lims = list(x = "same"))
+```
+
+View the display with the following:
+```{r, eval=FALSE}
+# view the display
+view()
+```
+For the online version, you will find a list of displays to choose from, of which the one with the name `list_sold_vs_time_datadr_tut` is the one we just created. This brings up the point that you can share your Trelliscope displays online.
+              

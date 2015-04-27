@@ -1,0 +1,72 @@
+
+processing file: dcraffle.624.1.Rmd
+  |...                                                              |   5%
+  ordinary text without R code
+
+  |.......                                                          |  11%
+label: load_data
+  |..........                                                       |  16%
+  ordinary text without R code
+
+  |..............                                                   |  21%
+label: iterative_fit
+  |.................                                                |  26%
+  ordinary text without R code
+
+  |.....................                                            |  32%
+label: boot_prep
+  |........................                                         |  37%
+  ordinary text without R code
+
+  |...........................                                      |  42%
+label: snow_unbal
+  |...............................                                  |  47%
+  ordinary text without R code
+
+  |..................................                               |  53%
+label: snow_bal
+  |......................................                           |  58%
+  ordinary text without R code
+
+  |.........................................                        |  63%
+label: mc_both
+  |............................................                     |  68%
+  ordinary text without R code
+
+  |................................................                 |  74%
+label: parallel_both
+  |...................................................              |  79%
+  ordinary text without R code
+
+  |.......................................................          |  84%
+label: aggregate_results
+  |..........................................................       |  89%
+  ordinary text without R code
+
+  |..............................................................   |  95%
+label: cleanup (with options) 
+List of 1
+ $ echo: logi FALSE
+
+  |.................................................................| 100%
+  ordinary text without R code
+
+
+/usr/lib/rstudio-server/bin/pandoc/pandoc dcraffle.624.1.utf8.md --to html --from markdown+autolink_bare_uris+ascii_identifiers+tex_math_single_backslash-implicit_figures --output dcraffle.624.1.html --smart --email-obfuscation none --self-contained --standalone --section-divs --template /usr/lib64/R/library/rmarkdown/rmd/h/default.html --variable theme:bootstrap --include-in-header /tmp/RtmpZohSSJ/rmarkdown-str15fbc681e1b86.html --mathjax --variable mathjax-url:https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML --no-highlight --variable highlightjs=/usr/lib64/R/library/rmarkdown/rmd/h/highlight 
+output file: dcraffle.624.1.knit.md
+
+
+ *** caught segfault ***
+address 0x7fdccb9f94b0, cause 'memory not mapped'
+
+Traceback:
+ 1: system(paste(which, shQuote(names[i])), intern = TRUE, ignore.stderr = TRUE)
+ 2: withCallingHandlers(expr, warning = function(w) invokeRestart("muffleWarning"))
+ 3: suppressWarnings(system(paste(which, shQuote(names[i])), intern = TRUE,     ignore.stderr = TRUE))
+ 4: Sys.which("locale")
+ 5: detect_generic_lang()
+ 6: Sys.setenv(LANG = detect_generic_lang())
+ 7: with_pandoc_safe_environment({    result <- system(command)})
+ 8: pandoc_convert(utf8_input, pandoc_to, output_format$pandoc$from,     output_file, run_citeproc, output_format$pandoc$args, !quiet)
+ 9: rmarkdown::render("dcraffle.624.1.Rmd", encoding = "UTF-8")
+aborting ...

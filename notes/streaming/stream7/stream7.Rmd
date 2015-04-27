@@ -1,0 +1,196 @@
+---
+title: "stream extensions"
+author: "jharner"
+date: "April 21, 2015"
+output: html_document
+---
+
+## 7. Extending the stream framework
+
+Since stream mining is a relatively young field and many advances are expected in the near future, the object oriented framework in stream is developed with easy extensibility in mind. Implementations for data streams (DSD) and data stream mining tasks (DST) can be easily added by implementing a small number of core functions. The actual implementation can be written in either R, Java, C/C++ or any other programming language which can be in- terfaced by R.
+
+### 7.1  Adding a new data stream source (DSD)
+
+Class membership and the inheritance hierarchy is represented by a vector of class names stored as the object’s class attribute. For example, an object of class   `DSD_Gaussians` will have the class attribute vector `c("DSD_Gaussians", "DSD_R", "DSD")` indicating that the object is an R implementation of DSD. This allows the framework to implement all common functionality as functions at the level of `DSD` and `DSD_R` and only a minimal set of functions is required to implement a new data stream source.
+
+For a new DSD implementation only the following two functions need to be implemented:  
+1. A creator function (with a name starting with the prefix `DSD_`) and  
+2. the `get_points()` method.  
+
+The creator function creates an object of the appropriate `DSD` subclass. Typically this S3 object contains a list of all parameters, an open R connection and/or an environment or a reference class for storing state information (e.g., the current position in the stream). Standard parameters are `d` and `k` for the number of dimensions of the created data and the true number of clusters, respectively. In addition an element called `"description"` should be provided. This element is used by `print()`.
+
+The implemented `get_points()` needs to dispatch for the class and create as the output a data frame containing the new data points as rows. Also, if the ground truth (true cluster assignment as an integer vector; noise is represented by `NA`) is available, then this can be attached to the data frame as an attribute called "assignment".
+
+For a very simple example, we show here the implementation of `DSD_UniformNoise` available in the package’s source code in file `DSD_UniformNoise.R`. This generator creates noise points uniformly distributed in a $d$-dimensional hypercube with a given range.
+
+```{r}
+library(stream)
+DSD_UniformNoise <- function(d = 2, range = NULL) {
+  if(is.null(range)) range <- matrix(c(0, 1), ncol = 2, nrow = d, byrow = TRUE)
+  structure(list(description = "Uniform Noise Data Stream", d = d, k = NA_integer_,
+                 range = range),
+            class = c("DSD_UniformNoise", "DSD_R", "DSD"))
+}
+get_points.DSD_UniformNoise <- function(x, n = 1, assignment = FALSE, ...) {
+  data <- as.data.frame(t(replicate(n,
+    runif(x$d, min = x$range[ , 1], max = x$range[ , 2]))))
+  if(assignment) attr(data, "assignment") <- rep(NA_integer_, n)
+  data
+}
+```
+
+The constructor only stores the description, the dimensionality and the range of the data. For this data generator k, the number of true clusters, is not applicable. Since all data is random, there is also no need to store a state. The `get_points()` implementation creates `n` random points and if assignments are needed attaches a vector with the appropriate number of `NA`s indicating that the data points are all noise. Several more complicated examples are available in the package’s source code directory in files starting with `DSD_`.
+
+### 7.2 Adding a new data stream tasks (DST)
+
+To add a new data stream mining tasks (e.g., frequent pattern mining), a new package with a subclass hierarchy similar to the hierarchy in Figure 7 (on page 20) for data stream clustering (`DSC`) can be easily added. This new package can take full advantage of the already existing infrastructure in `stream`. 
+
+We discuss how to interface an existing algorithm with `stream`. We concentrate again on clustering, but interfacing algorithms for other types of tasks is similar. To interface an existing clustering algorithm with stream,
+
+1. a creator function (typically named after the algorithm and starting with `DSC_`) which created the clustering object,   
+2. an implementation of the actual cluster algorithm, and  
+3. accessors for the clustering  
+
+are needed. The implementation depends on the interface that is used. Currently an R interface is available as `DSC_R` and a MOA interface is implemented in `DSC_MOA` (in `streamMOA`).
+
+For the R interface, the clustering class needs to contain the elements `"description"` and `"RObj"`. The `description` needs to contain a character string describing the algorithm. `ROb`j is expected to be a reference class object and contain the following methods:  
+
+1. `cluster(newdata, ...)`, where newdata is a data frame with new data points.
+2. For micro-clusters:` get_microclusters(...)` and `get_microweights(...)`  
+3. For macro-clusters: `get_macroclusters(...)`, `get_macroweights` and   `microToMacro(micro, ...)` which does micro- to macro-cluster matching.  
+
+Note that these are methods for reference classes and do not contain the called object in the parameter list. Neither of these methods are called directly by the user. Figure 8 (on page 22) shows that the function `update()` is used to cluster data points, and `get_centers()` and `get_weights()` are used to obtain the clustering. These user facing functions call internally the methods in `RObj` via the R interface in class `DSC_R`.
+
+## 8. Example applications
+
+## 8.1. Experimental comparison of different algorithms
+
+Providing a framework for rapid prototyping new data stream mining algorithms and comparing them experimentally is the main purpose of `stream`. In this section we give a more elaborate example of how to perform a comparison between several algorithms.
+
+First, we set up a static data set. We extract 1500 data points from the Bars and Gaussians data stream generator with 5% noise and put them in a `DSD_Memory`. This object is used to replay the same part of the data stream for each algorithm. We will use the first 1000 points to learn the clustering and the remaining 500 points for evaluation.
+```{r}
+library("stream")
+stream <- DSD_Memory(DSD_BarsAndGaussians(noise = .05), n = 1500)
+stream
+plot(stream)
+``` 
+
+The structure of the data set consists of four clusters, two Gaussians and two uniformly filled rectangular clusters. The Gaussian and the bar to the right have 1/3 the density of the other two clusters.
+
+We initialize four algorithms from stream. We choose the parameters experimentally so that the algorithms produce each approximately 100 micro-clusters.
+```{r}
+algorithms <- list(
+  'Sample' = DSC_TwoStage(micro = DSC_Sample(k = 100), macro = DSC_Kmeans(k = 4)),
+  'Window' = DSC_TwoStage(micro = DSC_Window(horizon = 100),
+                          macro = DSC_Kmeans(k = 4)),
+  'D-Stream' = DSC_DStream(gridsize = .7, Cm = 1.5),
+  'tNN' = DSC_tNN(r = .45)
+)
+```
+
+The algorithms are reservoir sampling reclustered with weighted k-means, sliding window reclustered with weighted k-means, `D-Stream` and `tNN` (threshold nearest-neighbors) with their built-in reclustering strategies. We store the algorithms in a list for easier handling and then cluster the same 1000 data points with each algorithm. Note that we have to reset the stream each time before we cluster.
+```{r}
+for(a in algorithms) {
+  reset_stream(stream)
+  update(a, stream, n = 1000)
+}
+```
+
+We use `nclusters()` with `type="micro"` to inspect the number of micro-clusters.
+```{r}
+sapply(algorithms, nclusters, type = "micro")
+```
+
+To inspect micro-cluster placement, we plot the calculated micro-clusters on a sample of the original data.
+```{r}
+op <- par(no.readonly = TRUE)
+layout(mat = matrix(1:length(algorithms), ncol = 2))
+for(a in algorithms) {
+  reset_stream(stream)
+  plot(a, stream, main = a$description, type = "micro")
+}
+par(op)
+```
+
+Micro-clusters are shown as red circles and the size is proportional to each cluster’s weight. Reservoir sampling and the sliding window select some data points as micro-clusters and also include a few noise points. `D-Stream` and `tNN` suppress noise well and concentrate the micro-clusters on the real clusters. `D-Stream` is grid-based and thus the micro-clusters are regularly spaced. `tNN` produces a similar, almost regular pattern.
+
+It is also interesting to compare the assignment areas for micro-clusters created by different algorithms. The assignment area is the area around the center of a micro-cluster in which points are considered to belong to the micro-cluster. The specific clustering algorithm decides how points which fall inside the assignment area of several micro-clusters (e.g., assign the point to the closest center). To show the assignment area we add `assignment = TRUE` to `plot`. We also disable showing micro-cluster weights to make the plot less cluttered.
+```{r}
+op <- par(no.readonly = TRUE)
+layout(mat = matrix(1:length(algorithms), ncol = 2))
+for(a in algorithms) {
+  reset_stream(stream)
+  plot(a, stream, main = a$description,
+    assignment = TRUE, weight = FALSE, type = "micro")
+}
+par(op)
+```
+
+For regular micro-cluster-based algorithms the assignment areas are shown as dotted circles around micro-cluster centers. For example for `tNN` the assignment area for all micro-clusters has exactly the same radius. `D-Stream` uses a grid for assignment and thus shows the grid. Reservoir sampling and sliding window does not have assignment areas and data points are always assigned to the nearest micro-cluster.
+
+To compare the cluster quality, we can check for example the micro-cluster purity. Note that we set the stream to position 1001 since we have used the first 1000 points for learning and we want to use data points not seen by the algorithms for evaluation.
+
+```{r}
+sapply(algorithms, FUN=function(a) {
+  reset_stream(stream, pos = 1001)
+  evaluate(a, stream,
+    measure = c("numMicroClusters", "purity"), type = "micro", n = 500)
+})
+```
+
+We need to be careful with the comparison of these numbers, since they depend heavily on the number of micro-clusters with more clusters leading to a better value. We can compare purity here since the number of micro-clusters is close. All algorithms produce very good values for purity for this data set with reasonably well separated clusters.
+
+Next, we compare macro-cluster placement. `D-Stream` and `tNN` have built-in reclustering strategies. `D-Stream` joins adjacent dense grid cells to form macro-clusters and `tNN` joins micro-clusters reachable by overlapping assignment areas. For sampling and sliding window we already have created a two-stage process together with weighted k-means (`k = 4`).
+
+```{r}
+p <- par(no.readonly = TRUE)
+layout(mat=matrix(1:length(algorithms), ncol = 2))
+for(a in algorithms) {
+  reset_stream(stream)
+  plot(a, stream, main = a$description, type = "both")
+}
+par(op)
+```
+
+Figure 17 shows the macro-cluster placement. Sampling and the sliding window use k-means reclustering and therefore produce exactly four clusters. However, the placement is off splitting a true cluster and missing one of the less dense clusters. `D-Stream` and `tNN` identify the two denser clusters correctly, but split the lower density clusters into multiple pieces.
+
+```{r}
+sapply(algorithms, FUN = function(a) {
+  reset_stream(stream, pos = 1001)
+  evaluate(a, stream, measure = c("numMacroClusters", "purity",
+                                  "SSQ", "cRand", "silhouette"),
+           n = 500, assign = "micro", type = "macro")
+})
+```
+
+The evaluation measures at the macro-cluster level reflect the findings from the visual analysis of the clustering with D-Stream producing the best results. Note that `D-Stream` and `tNN` do not assign some points which are not noise points which has a negative effect on the average silhouette width.
+
+Comparing algorithms on evolving stream is similarly easy in stream. For the following example we use again `DSD_Benchmark` with two moving clusters crossing each other’s path. First we create a stream which stores 5000 data points in memory.
+```{r}
+stream <- DSD_Memory(DSD_Benchmark(1), n = 5000)
+```
+
+Next we initialize again a list of clustering algorithms. Note that this time we use a `k` of two for reclustering sampling and the sliding window. We also use a sample biased to newer data points since otherwise outdated data points would result in creating outdated clusters. For the sliding window, `D-Stream` and `tNN` we use faster decay (`lambda=.01`) since the clusters in the data stream move very quickly.
+```
+algorithms <- list(
+  'Sample' = DSC_TwoStage(micro = DSC_Sample(k = 100, biased = TRUE),
+                          macro = DSC_Kmeans(k=2)),
+  'Window' = DSC_TwoStage(micro = DSC_Window(horizon = 100, lambda = .01),
+                          macro = DSC_Kmeans(k = 2)),
+  'D-Stream' = DSC_DStream(gridsize = .05, lambda = .01),
+  'tNN' = DSC_tNN(r = .02, lambda = .01))
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+

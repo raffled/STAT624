@@ -1,0 +1,79 @@
+---
+title: "WordCount"
+author: "jharner"
+date: "February 14, 2015"
+output: html_document
+---
+
+This document assumes you have created the `wvu-hadoop` machine and it is running. If the machine has been created, but not running, then from the command line in the local `wvu-hadoop` directory run:
+```
+vagrant up
+```
+
+If you do not have `wvu-hadoop`, create a directory, e.g., `wvu-hadoop`, on your local machine and go to this directory. Then prior to running `vagrant up` from the command line, run:
+```
+vagrant init http://www.stat.wvu.edu/rc2/wvu-hadoop.box
+```
+
+To get to the java directory containing the `WordCount` example from the current directory on your local machine containing `Vagrantfile` run:
+```
+vagrant ssh
+cd examples/java
+ls
+```
+
+To run the java example from the `java` folder within the Vagrant machine.
+
+Check to see what files are in `hdfs`.
+```
+hdfs dfs -ls
+```
+
+If the data file `words` is not in `hdfs`, then import it into `hdfs` using `put` and verify it is there:
+```
+hdfs dfs -put ../data words
+hdfs dfs -ls
+```
+
+Hadoop does not overwrite files. If `output` is in `hdfs`, then remove it (recursively) using `rm -r`:
+```
+hdfs dfs -rm -r output
+```
+
+The source code for `WordCount.java` is in `~/examples/java/src/main/java`. You can use `cat WordCount.java` to view it.
+
+The JAR file is in `~/examples/java/target`. Run the `WordCount` program:
+```
+hadoop jar target/WordCount-0.0.1-SNAPSHOT.jar WordCount words output
+```
+
+Check to see if the `output` file has been created:
+```
+hdfs dfs -ls
+```
+
+Retrieve the `output` file from `hdfs` and call it `words.output`:
+```
+hdfs dfs -get output words.output
+```
+
+See if `words.output` is in the `java` directory and then list it.
+```
+ls -l  
+cd words.output  
+cat part-r-00000
+```
+
+Currently, R is not in the Vagrant machine. To make the output available locally, copy `part-r-00000` to `\vagrant`.
+```
+cp part-r-00000 \vagrant
+```
+
+Launch a terminal from the `wvu-hadoop` directory and then run R. From the R prompt:
+```
+> words.df <- read.table("part-r-00000", sep="\t", col.names=c("word", "freq"))
+> words.df
+```
+Then R analyses can be run.
+
+

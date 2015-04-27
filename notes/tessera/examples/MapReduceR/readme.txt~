@@ -1,0 +1,10 @@
+To run this example, use the following commands:
+
+hdfs dfs -put cdata.csv
+hdfs dfs -put mapper.R
+hdfs dfs -put reducer.R
+hadoop jar /usr/lib/hadoop-mapreduce/hadoop-streaming-2.5.0-cdh5.3.1.jar -files mapper.R,reducer.R -inputformat org.apache.hadoop.mapred.lib.NLineInputFormat -input cdata.csv -output mrr-output -numReduceTasks 1 -mapper mapper.R -reducer reducer.R 
+hdfs dfs -get mrr-output
+
+The output should now be in the mrr-output directory.
+

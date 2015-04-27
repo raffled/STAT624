@@ -1,0 +1,117 @@
+---
+title: "stream introduction"
+author: "jharner"
+date: "April 8, 2015"
+output: html_document
+---
+
+## 1. Introduction
+
+Typical statistical and data mining methods (e.g., clustering, regression, classification and frequent pattern mining) work with “static” data sets, meaning that the complete data set is available as a whole to perform all necessary computations. Well known methods like $k$-means clustering, linear regression, decision tree induction and the APRIORI algorithm to find frequent itemsets scan the complete data set repeatedly to produce their results.
+
+in recent years more and more applications need to work with data which are not static, but are the result of a continuous data generating process which is likely to evolve over time. Some examples are web click-stream data, computer network monitoring data, telecommunication connection data, readings from sensor nets and stock quotes. These types of data are called *data streams*.
+
+A data stream can be formalized as an ordered sequence of data points
+\[
+  Y = \langle y_1, y_2, y_3, \ldots \rangle
+\]
+where the index reflects the order (either by explicit time stamps or just by an integer reflecting order). The data points themselves are often simple vectors in multidimensional space, but can also contains nominal/ordinal variables, complex information (e.g., graphs) or unstructured information (e.g., text). The characteristic of continually arriving data points introduces an important property of data streams which also poses the greatest challenge: the size of a data stream is potentially unbounded.
+
+Data stream processing algorithms:
+
+* Bounded storage: The algorithm can only store a very limited amount of data to summarize the data stream.  
+* Single pass: The incoming data points cannot be permanently stored and need to be processed at once in the arriving order.  
+* Real-time: The algorithm has to process data points on average at least as fast as the data is arriving.  
+* Concept drift: The algorithm has to be able to deal with a data generating process which evolves over time (e.g., distributions change or new structure in the data appears).  
+
+Most existing algorithms designed for static data are not able to satisfy all these requirements and thus are only usable if techniques like sampling or time windows are used to extract small, quasi-static subsets. Even though R represents an ideal platform to develop and test prototypes for data stream mining algorithms, R currently does only have very limited infrastructure for data streams.
+
+Some packages available from the Comprehensive R Archive Network1 related to streams:
+
+* **Data Sources:** Random numbers are typically created as streams, e.g.,  `rstream` and `rlecuyer`. Financial data can be obtained via packages like `quantmod`. Intra-day price and trading volume can be considered a data stream. For Twitter, a popular micro-blogging service, packages like `streamR` and `twitteR` provide interfaces to retrieve life Twitter feeds.  
+
+* **Statistical models:** `factas` implements iterative versions of correspondence analysis, PCA, canonical correlation analysis and canonical discriminant analysis. `birch` implements BIRCH, a clustering algorithm for very large data sets. The algorithm maintains a clustering feature tree which can be updated in an iterative fashion. `rEMM` implemented a stand-alone version of a pure data stream clustering algorithm enhanced with a methodology to model a data stream’s temporal structure. Very recently `RMOA` was introduced.  
+
+* **Distributed computing frameworks:** With the development of Hadoop2, distributed computing frameworks to solve large scale computational problems have become very popular. HadoopStreaming is available to use map and reduce scripts written in R within the Java-based Hadoop framework. A distributed framework for realtime computation is `Storm`. `Storm` builds on the idea of constructing a computing topology by connecting spouts (data stream sources) with a set of bolts (computational units). `RStorm` provides an environment to prototype bolts in R. Spouts are represented as data frames. Bolts developed in `RStorm` can currently not directly be used in Storm.
+
+Even in the stream-related packages discussed above, data is still represented by data frames or matrices which is suitable for static data but not ideal to represent streams.
+
+The package `stream` provides a framework to represent and process data streams and use them to develop, test and compare data stream algorithms in R. We include an initial set of data stream generators and data stream clustering algorithms.
+
+## 2. Data stream mining
+
+Due to advances in data gathering techniques, it is often the case that data is no longer viewed as a static collection, but rather as a potentially very large dynamic set, or stream, of incoming data points. The most common data stream mining tasks are clustering, classification and frequent pattern mining.
+
+### 2.1. Data stream clustering
+
+Clustering, the assignment of data points to (typically $k$) groups such that points within each group are more similar to each other than to points in different groups, is a very basic unsupervised data mining task. For static data sets, methods like:  
+
+* k-means,  
+* k-medoids,  
+* hierarchical clustering, and  
+* density-based  
+
+methods have been developed among others.
+
+Many of these methods are available in tools like R. However, the standard algorithms need access to all data points and typically iterate over the data multiple times. This requirement makes these algorithms unsuitable for large data streams and led to the development of data stream clustering algorithms.
+
+Most data stream clustering algorithms deal with the problems of unbounded stream size, and the requirements for real-time processing in a single pass by using the following two-stage online/o✏ine approach.
+
+1. Online: Summarize the data using a set of $k^{\prime}$ micro-clusters organized in a space efficient data structure which also enables fast look-up. Micro-clusters are representatives for sets of similar data points and are created using a single pass over the data (typically in real time when the data stream arrives). Micro-clusters are often represented by cluster centers and additional statistics such as weight (local density) and dispersion (variance). Each new data point is assigned to its closest (in terms of a similarity function) micro-cluster. Some algorithms use a grid instead and micro-clusters are represented by non-empty grid cells. If a new data point cannot be assigned to an existing micro-cluster, a new micro-cluster is created. The algorithm might also perform some housekeeping (merging or deleting micro-clusters) to keep the number of micro-clusters at a manageable size or to remove information outdated due to a change in the stream’s data generating process.
+
+2. Offline: When the user or the application requires a clustering, the $k^{\prime}$ micro-clusters are reclustered into $k \ll k^{\prime}$ final clusters sometimes referred to as macro-clusters. Since the online part is usually not regarded time critical, most researchers use a conventional clustering algorithm where micro-cluster centers are regarded as pseudo-points. Typical reclustering methods involve $k$-means or clustering based on the concept of reachability. The algorithms are often modified to take also the weight of micro-clusters into account.
+
+The most popular approach to adapt to concept drift (changes of the data generating process over time) is to use the exponential fading strategy. Micro-cluster weights are faded in every time step by a factor of $2^{-\lambda}$, where $\lambda \gt 0$ is a user-specified fading factor. This way, new data points have more impact on the clustering and the influence of older points gradually disappears. Alternative models use sliding or landmark windows.
+
+### 2.2. Other popular data stream mining tasks
+
+Classification, learning a model in order to assign labels to new, unlabeled data points is a well studied supervised machine learning task. Methods include naive Bayes, $k$-nearest neighbors, classification trees, support vector machines, and rule-based classifiers. These algorithms need access to the complete training data several times and thus are not suitable for data streams with constantly arriving new training data and concept drift.
+
+Several classification methods suitable for data streams have been developed. Examples are Very Fast Decision Trees (VFDT) using Hoeffding trees, the time window-based Online Information Network (OLIN),  and On-demand Classification based on micro-clusters found with the data-stream clustering algorithm.
+
+Another common data stream mining task is frequent pattern mining. The aim of frequent pattern mining is to enumerate all frequently occurring patterns (e.g., itemsets, subsequences, subtrees, subgraphs) in large transaction data sets. Patterns are then used to summarize the data set and can provide insights into the data. Although finding all frequent patterns in large data sets is a computationally expensive task, many efficient algorithms have been developed for static data sets. However, these algorithms use breath-first or depth-first search strategies which results in the need to pass over each transaction (i.e., data point) several times and thus makes them unusable for the case where transactions arrive and need to be processed in a streaming fashion. 
+
+### 2.3. Existing tools
+
+`MOA` (short for Massive Online Analysis) is a framework implemented in Java for stream classification, regression and clustering. It was the first experimental framework to provide easy access to multiple data stream mining algorithms, as well as to tools for generating data streams that can be used to measure and compare the performance of different algorithms.
+
+`SAMOA` (Scalable Advanced Massive Online Analysis) is a recently introduced tool for distributed stream mining with Storm or the Apache S4 distributed computing platform. Similar to `MOA` it is implemented in Java, and supports the basic data stream mining tasks of clustering, classification and frequent pattern mining. Some MOA clustering algorithms are interfaced in `SAMOA`.
+
+`MOA` is currently the most complete framework for data stream clustering research and it is an important pioneer in experimenting with data stream algorithms. MOA’s advantages are that it interfaces with WEKA, provides already a set of data stream classification and clustering algorithms and it has a clear Java interface to add new algorithms or use the existing algorithms in other applications.
+
+A drawback of `MOA` and the other frameworks for R users is that for all but very simple experiments custom Java code has to be written. The recently introduce R-package `RMOA` interfaces MOA’s data stream classification algorithms, however, it focuses on processing large data sets that do not fit into main memory and not on data streams.
+
+## 3. The stream framework
+
+The `stream` framework provides an R-based alternative to `MOA` which seamlessly integrates with the extensive existing R infrastructure. Since R can interface code written in many differrnt programming languages (e.g., C/C++, Java, Python), data stream mining algorithms in any of these languages can be easily integrated into `stream`.
+
+The `stream` extension package `streamMOA` also interfaces the data stream clustering algorithms already available in `MOA` using the `rJava` package.
+
+We will start with a very short example to make the introduction of the framework and its components easier to follow. After loading `stream`, we create a simulated data stream with data points drawn from three random Gaussians in 2D space.
+```{r}
+library(stream)
+stream <- DSD_Gaussians(k = 3, d = 2)
+```
+
+Next, we create an instance of the data stream clustering algorithm D-Stream and update the model with the next 500 data points from the stream.
+```{r}
+dstream <- DSC_DStream(gridsize = .1, Cm = 1.2)
+update(dstream, stream, n = 500)
+```
+
+Finally, we perform reclustering using $k$-means with three clusters and plot the resulting micro and macro clusters.
+```{r}
+km <- DSC_Kmeans(k = 3)
+recluster(km, dstream)
+plot(km, stream, type = "both")
+```
+
+As shown in this example, the stream framework consists of two main components:
+
+1. Data stream data (DSD) simulates or connects to a data stream.  
+2. Data stream task (DST) performs a data stream mining task. In the example above, we performed twice a data stream clustering (DSC) task.  
+
+We start by creating a DSD object and a DST object (see Fig. 2: A high-level view of the `stream` architecture). Then the DST object starts receiving data form the DSD object. At any time, we can obtain the current results from the DST object. DSTs can implement any type of data stream mining task (e.g., classification or clustering).
+
+Since stream mining is a relatively young field and many advances are expected in the near future, the object oriented framework in stream was developed with easy extensibility in mind. We are using the `S3` class system throughout and, for performance reasons, the R-based algorithms are implemented using `reference` classes. The framework provides for each of the two core components a lightweight interface definition (i.e., an abstract class) which can be easily implemented to create new data stream types or to interface new data stream mining algorithms. Developers can also extend the infrastructure with new data mining tasks.
+

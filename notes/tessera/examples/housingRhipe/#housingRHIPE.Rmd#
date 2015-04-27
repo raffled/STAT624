@@ -1,0 +1,247 @@
+---
+title: 'RHIPE: Housing Data Example'
+author: "jharner"
+date: "March 29, 2015"
+output: html_document
+---
+
+## The Data
+
+The housing data consist of 7 monthly variables on housing sales from Oct 2008 to Mar 2014, which is 66 months. The measurements are for 2883 counties in 48 U.S. states, excluding Hawaii and Alaska, and also for the District of Columbia which we treat as a state with one county. The data were derived from sales of housing units from Quandl's Zillow Housing Data (www.quandl.com/c/housing). A housing unit is a house, an apartment, a mobile home, a group of rooms, or a single room that is occupied or intended to be occupied as a separate living quarter.
+
+The variables are:
+
+* FIPS: FIPS county code, an unique identifier for each U.S. county  
+* county: county name  
+* state: state abbreviation  
+* date: time of sale measured in months, from 1 to 66  
+* units: number of units sold  
+* listing: monthly median listing price (dollars per square foot)  
+* selling: monthly median selling price (dollars per square foot)  
+
+Many observations of the last three variables are missing: units 68%, listing 7%, and selling 68%.
+
+The number of measurements (including missing), is 7 x 66 x 2883 = 1,331,946. So this is in fact a small dataset that could be analyzed in the standard serial R. However, we can use them to illustrate how RHIPE R commands implement Divide and Recombine. We simply pretend the data are large and complex, break into subsets, and continuing on with D&R. The small size let's you easily pick up the data, follow along using the R commands in the tutorial, and explore RHIPE yourself with other RHIPE R commands.
+
+`housing.txt` is available in our Tesseradata Github repository of the RHIPE documentation here The file is a table with 190,278 rows (66 months x 2883 counties) and 7 columns (the variables). The fields in each row are separated by a comma, and there are no headers in the first line.
+
+```
+housing <- read.table("housing.txt", sep=",")
+head(housing)
+```
+
+## Write housing.txt to the HDFS
+
+To get started, we need to make `housing.txt` available as a text file within the HDFS file system. This puts it in a place where it can be read into R, form subsets, and write the subsets to the HDFS. This is similar to what we do using R in the standard serial way; if we have a text file to read into R, we put it in a place where we can read it into R, for example, in the working directory of the R session.
+
+To set this up, the system administrator must do two tasks. On the R session server, set up a login directory where you have write permission; let's call it yourloginname in, say, `/home/vagrant`. In the HDFS, the administrator does a similar thing, creates, say, /yourloginname which is in the root directory.
+
+Your first step, as for the standard R case, is to copy housing.txt to a directory on the R-session server where your R session is running. Suppose in your login directory you have created a directory `housing` for your analysis of the housing data.
+```
+mkdir housing
+```
+Assuming `housing.txt` is in `/vagrant/housing`, you can now copy `housing.txt` to housing in your server R session:
+```
+cd housing
+cp /vagrant/housing/housing.txt .
+ls -l
+```
+
+The next step is to get housing.txt onto the HDFS as a text file, so we can read it into R on the cluster. There are Hadoop commands that could be used directly to copy the file, but our promise to you is that you never need to use Hadoop commands. There is a RHIPE function, `rhput()` that will do it for you.
+```
+rhmkdir("/tmp/housing")
+rhls("/tmp")
+rhput("housing.txt", "/tmp/housing/housing.txt")
+```
+
+The `rhput()` function takes two arguments. The first is the path name of the R server file to be copied. The second argument is the path name HDFS where the file will be written. Note that for the HDFS, in the directory /yourloginname there is a directory `housing`. 
+
+We can confirm that the housing data text file has been written to the HDFS with the `rhexists()` function.
+```
+rhexists("/tmp/housing/housing.txt")
+```
+
+## Read and Divide by County
+
+Our division method for the housing data will be to divide by county, so there will be 2883 subsets. Each subset will be a data.frame object with 4 column variables: date, units, listing, and selling. FIPS, state, and county are not column variables because each has only one value for each county; their values are added to the data.frame as attributes.
+
+### Map R Code
+
+The Map R code for the county division is
+```
+map1 <- expression({
+  lapply(seq_along(map.keys), function(r) {
+    line = strsplit(map.values[[r]], ",")[[1]]
+    outputkey <- line[1:3]
+    outputvalue <- data.frame(
+      date = as.numeric(line[4]),
+      units =  as.numeric(line[5]),
+      listing = as.numeric(line[6]),
+      selling = as.numeric(line[7]),
+      stringsAsFactors = FALSE
+    )
+  rhcollect(outputkey, outputvalue)
+  })
+})
+```
+
+Map has input key-value pairs, and output key-value pairs. Each pair has an identifier, the key, and numeric-categorical information, the value. The Map R code is applied to each input key-value pair, producing one output key-value pair. Each application of the Map code to a key-value pair is carried out by a mapper, and there are many mappers running in parallel without communication (embarrassingly parallel) until the Map job completes.
+
+`RHIPE` creates input key-value pair `list` objects, `map.keys` and `map.values`, based on information that it has. Let r be an integer from 1 to the number of input key-value pairs.` map.values[[r]]` is the value for `key map.keys[[r]]`. The housing data inputs come from a text file in the HDFS, `housing.txt`, By RHIPE convention, for a text file, each Map input key is a text file line number, and the corresponding Map input value is the observations in the line, read into R as a single text string. In our case each line value is the observations of the 7 county variables for the line.
+
+This Map code is really a `for` loop with r as the looping variable, but is done by `lapply()` because it is in general faster than for r in `1:length(map.keys)`. The loop proceeds through the input keys, specified by the first argument of `lapply`. The second argument of the above `lapply` defines the Map expression with the argument `r`, an index for the Map keys and values.
+
+The function `strsplit()` splits each character-string line input value into the individual observations of the text line. The result, `line`, is a list of length one whose element is a character vector whose elements are the line observations. In our case, the observations are a character vector of length 7, in order: `FIPS`, `county`, `state`, `date`, `units`, `listing`, `selling`.
+
+Next we turn to the Map output key-value pairs. outputkey for each text line is a character vector of length 3 with FIPS, county, and state. outputvalue is a data.frame with one row and 4 columns, the observations of date, units, listing, and selling, each a numeric object.
+
+The argument of `data.frame`, `stringsAsFactors`, is is given the value `FALSE`. This leaves character vectors in the `data.frame` as is, and does on convert to a factor.
+
+The RHIPE function `rhcollect()` forms a Map output key-value pair for each line, and writes the results to the HDFS as a key-value pair list object.
+
+### Reduce R Code
+
+The Reduce R code for the county division is
+```
+reduce1 <- expression(
+  pre = {
+    reduceoutputvalue <- data.frame()
+  },
+  reduce = {
+    reduceoutputvalue <- rbind(reduceoutputvalue, do.call(rbind, reduce.values))
+  },
+  post = {
+    reduceoutputkey <- reduce.key[1]
+    attr(reduceoutputvalue, "location") <- reduce.key[1:3]
+    names(attr(reduceoutputvalue, "location")) <- c("FIPS","county","state")
+    rhcollect(reduceoutputkey, reduceoutputvalue)
+  }
+)
+```
+
+The output key-value pairs of Map are the input key-value pairs to Reduce. The first task of Reduce is to group its input key-value pairs by unique key. The Reduce R code is applied to the key-value pairs of each group by a reducer. The number of groups varies in applications from just one, with a single Reduce output, to many. For multiple groups, the reducers run in parallel, without communication, until the Reduce job completes.
+
+`RHIPE` creates two list objects `reduce.key` and `reduce.values`. Each element of `reduce.key` is the key for one group, and the corresponding element of `reduce.values` has the values for the group to which the Reduce code is applied. Now in our case, the key is `county` and the values are the observations of `date`, `units`, `listing`, and `selling` for the all housing units in the county.
+
+Note the Reduce code has a certain structure: expressions `pre`, `reduce`, and `post`. In our case `pre` initializes `reduceoutputvalue` to a data.frame(). `reduce` assembles the county data.frame as the reducer receives the values through `rbind`(reduceoutputvalue, do.call(rbind, reduce.values)); this uses `rbind()` to add rows to the data.frame object. post operates further on the result of reduce. In our case it first assigns the observation of `FIPS` as the key. Then it adds `FIPS`,`county`, and `state` as attributes. Finally the RHIPE function `rhcollect()` forms a Reduce output key-value pair list, and writes it to the HDFS.
+
+## The RHIPE Manager: `rhwatch()`
+
+We begin with the RHIPE R function `rhwatch()`. It runs the R code you write to specify Map and Reduce operations, takes your specification of input and output files, and manages key-value pairs for you.
+
+The code for the county division is
+```
+mr1 <- rhwatch(
+  map      = map1,
+  reduce   = reduce1,
+  input    = rhfmt("/tmp/housing/housing.txt", type = "text"),
+  output   = rhfmt("/tmp/housing/byCounty", type = "sequence"),
+  readback = FALSE
+)
+```
+
+Arguments map and reduce take your Map and Reduce R code, which will be described below. `input` specifies the input to be the text file in the HDFS that we put there earlier using `rhput()`. The `file` supplies input key-value pairs for the Map code. output specifies the file name into which final output key-value pairs of the Reduce code that are written to the HDFS. `rhwatch()` creates this file if it does not exist, or overwrites it if it does not.
+
+The Reduce list output can also be written to the R global environment of the R session. One use of this is analytic recombination in the R session when the outputs are a small enough dataset. You can do this with the argument `readback`. If `TRUE`, the list is also written to the global environment. If `FALSE`, it is not. If `FALSE`, it can be written latter using the RHIPE R function `rhread()`.
+```
+countySubsets <- rhread("/tmp/housing/byCounty")
+```
+Suppose you just want to look over the byCounty file on the HDFS just to see if all is well, but that this can be done by looking at a small number of key-value pairs, say 10. The code for this is
+```
+countySubsets <- rhread("/tmp/housing/byCounty", max = 10)
+```
+
+Then you can look at the list of length 10 in various was such as
+```
+keys <- unlist(lapply(countySubsets, "[[", 1))
+keys
+attributes(countySubsets[[1]][[2]])
+```
+
+## Compute County Min, Median, Max
+
+With the county division subsets now in the HDFS we will illustrate using them to carry out D&R with a very simple recombination procedure based on a summary statistic for each county of the variable listing. We do this for simplicity of explanation of how RHIPE works. However, we emphasize that in practice, initial analysis would almost always involve comprehensive analysis of both the detailed data for all subset variables and summary statistics based on the detailed data.
+
+Our summary statistic consists of the minimum, median, and maximum of listing, one summary for each county. Map R code computes the statistic. The output key of Map, and therefore the input key for Reduce is state. The Reduce R code creates a data.frame for each state where the columns are FIPS, county, min, median, and max. So our example illustrates a scenario where we create summary statistics, and then analyze the results. This is an analytic recombination. In addition, we suppose that in this scenario the summary statistic dataset is small enough to analyze in the standard serial R. This is not uncommon in practice even when the raw data are very large and complex.
+
+### The Map R Code
+
+The Map R code is
+```
+map2 <- expression({
+  lapply(seq_along(map.keys), function(r) {
+    outputvalue <- data.frame(
+      FIPS = map.keys[[r]],
+      county = attr(map.values[[r]], "county"),
+      min = min(map.values[[r]]$listing, na.rm = TRUE),
+      median = median(map.values[[r]]$listing, na.rm = TRUE),
+      max = max(map.values[[r]]$listing, na.rm = TRUE),
+      stringsAsFactors = FALSE
+    )
+    outputkey <- attr(map.values[[r]], "state")
+    rhcollect(outputkey, outputvalue)
+  })
+})
+```
+
+`map.keys` is the Map input keys, the county subset identifiers FIPS. map.values is the Map input values, the county subset data.frame objects. The `lapply()` loop goes through all subsets, and the looping variable is r. Each stage of the loop creates one output key-value pair, outputkey and outputvalue. outputkey is the observation of state. outputvalue is a data.frame with one row that has the variables FIPS, county, min, median, and max for county FIPS. `rhcollect(outputkey, outputvalue)` emits the pairs to reducers, becoming the Reduce input key-value pairs.
+
+### The Reduce R Code
+
+The Reduce R code for the listing summary statistic is
+```
+reduce2 <- expression(
+  pre = {
+    reduceoutputvalue <- data.frame()
+  },
+  reduce = {
+    reduceoutputvalue <- rbind(reduceoutputvalue, do.call(rbind, reduce.values))
+  },
+  post = {
+    rhcollect(reduce.key, reduceoutputvalue)
+  }
+)
+```
+
+The first task of Reduce is to group its input key-value pairs by unique key, in this case by state. The Reduce R code is applied to the key-value pairs of each group by a reducer.
+
+Expression `pre`, initializes reduceoutputvalue to a `data.frame()`. `reduce` assembles the state data.frame as the reducer receives the values through `rbind(reduceoutputvalue, do.call(rbind, reduce.values))`; this uses `rbind()` to add rows to the data.frame object. post operates further on the result of reduce; `rhcollect()` forms a Reduce output key-value pair for each state. RHIPE then writes the Reduce output key-value pairs to the HDFS.
+
+### The RHIPE Manager: rhwatch()
+
+Here is the code for `rhwatch()`.
+```
+CountyStats <- rhwatch(
+  map      = map2,
+  reduce   = reduce2,
+  input    = rhfmt("/tmp/housing/byCounty", type = "sequence"),
+  output   = rhfmt("/tmp/housing/CountyStats", type = "sequence"),
+  readback = TRUE
+)
+```
+
+Our Map and Reduce code, `map2` and `reduce2`, is given to the arguments map and reduce. The code will be will be discussed later.
+
+The input key-value pairs for Map, given to the argument input, are our county subsets which were written to the HDFS directory /tmp/housing as the key-value pairs list object byCounty. The final output key-value pairs for Reduce, specified by the argument output, will be written to the list object CountyStats in the same directory as the subsets. The keys are the states, and the values are the data.frame objects for the states.
+
+The argument readback is given the value `TRUE`, which means `CountyStats` is also written to the R global environment of the R session. We do this because our scenario is that analytic recombination is done in R.
+
+The argument `mapred.reduce.tasks` is given the value 10, as in our use of it to create the county subsets.
+
+Recall that we told RHIPE in `rhwatch()` to also write the Reduce output to `CountyStats` in both the R server global environment. There, we can have a look at the results to make sure all is well. We can look at a summary
+```
+str(CountyStats)
+```
+
+We can look at the first key-value pair
+```
+CountyStats[[1]][[2]]
+```
+
+We can look at the data.frame for state "AL"
+```
+head(CountyStats[[1]][[2]])
+```
+
+
+

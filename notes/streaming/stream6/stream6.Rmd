@@ -1,0 +1,215 @@
+---
+title: "stream evaluation"
+author: "jharner"
+date: "April 8, 2015"
+output: html_document
+---
+
+## 6. Evaluating data stream clustering
+
+### 6.1. Introduction
+
+Evaluation of conventional clustering only measures how well the algorithm learns static structure in the data. Data streams often exhibit concept drift and it is important to evaluate how well the algorithm is able to adapt to these changes. The evaluation of data stream clustering is still in its infancy. `stream` can be used to evaluate clustering algorithms in terms of learning static structures and clustering dynamic streams.
+
+### 6.2. Evaluating the learned static structure
+
+Evaluation how well an algorithm is able to learn a static structure in the data is performed in stream via  
+```
+evaluate(dsc, dsd, measure, n = 100, type = c("auto", "micro", "macro"), assign = "micro", assignmentMethod = c("auto", "model", "nn"), ...) 
+```  
+where dsc is the evaluated clustering. `n` data points are taken from `dsd` and used for evaluation. The points are assigned to the clusters in the clustering in `dsc` using `get_assignment()`. By default the points are assigned to micro-clusters, but it is also possible to assign them to macro-cluster centers instead (`assign = "macro"`). New points can be assigned to clusters by the rule used in the clustering algorithm (`assignmentMethod = "model"`) or using nearest- neighbor assignment (`"nn"`). If the assignment method is set to `"auto"` then model assignment is used when available and otherwise nearest-neighbor assignment is used. The initial assignments are aggregated to the level specified in type. For example, for a macro-clustering, the initial assignments will be made by default to micro-clusters and then these assignments will be translated into macro-cluster assignments using the micro-to macro-cluster relationships stored in the clustering and available via `microToMacro()`. This separation between assignment and evaluation type is especially important for data with non-spherical clusters where micro-clusters are linked together in chains produced by a macro-clustering algorithm based on hierarchical clustering with single-link or reachability. Finally, the evaluation measure specified in measure is calculated. Several measures can be specified as a vector of character strings.
+
+Clustering evaluation measures can be categorized into internal and external cluster validity measures. Internal measures evaluate properties of the clustering. A simple measure to evaluate the compactness of (spherical) clusters in a clustering is the within-cluster sum of squares, i.e., the sum of squared distances between each data point and the center of its cluster (method `"SSQ"`). External measures use the ground truth (i.e., true partition of the data into groups) to evaluate the agreement of the partition created by the clustering algorithm with a known true partition.
+
+Measures currently available for `evaluate()` (method name are under quotation marks and the package that implements the evaluation measure is shown in parentheses) include:
+
+* Information items
+
+> "numMicroClusters" Number of micro-clusters    
+  "numMacroClusters" Number of macro-clusters   
+  "numClasses" Number of classes (i.e., groups in the ground truth)  
+
+* Internal evaluation measures  
+
+> "SSQ" Within cluster sum of squares (actual noise points identified by the clustering algorithm are excluded)  
+  "silhouette" Average silhouette width (actual noise points identified by the clustering algorithm are excluded) (cluster)  
+  "average.between" Average distance between clusters (fpc)  
+  "average.within" Average distance within clusters (fpc)  
+  "max.diameter" Maximum cluster diameter (fpc)  
+  "min.separation" Minimum cluster separation (fpc)  
+  "ave.within.cluster.ss" a generalization of the within-clusters sum of squares (half the sum of the within-cluster squared dissimilarities divided by the cluster size) (fpc)  
+  "g2" Goodman and Kruskal’s Gamma coefficient (fpc)  
+  "pearsongamma" Correlation between distances and a 0-1-vector where 0 means
+same cluster, 1 means different clusters (fpc)  
+  "dunn" Dunn index (minimum separation over maximum diameter) (fpc)  
+  "dunn2" Minimum average dissimilarity between two cluster over maximum average within-cluster dissimilarity (fpc)  
+  "entropy" entropy of the distribution of cluster memberships (fpc)  
+  "wb.ratio" average.within over average.between (fpc)  
+  
+* External evaluation measures  
+
+> "precision", "recall", "F1". A true positive (TP) decision assigns two points in the same true cluster also to the same cluster, a true negative (TN) decision assigns two points from two different true clusters to two different clusters. A false positive (FP) decision assigns two points from the same true cluster to two different clusters. A false negative (FN) decision assigns two points from the same true cluster to different clusters.
+
+  $\mbox{precision} = \frac{TP}{TP + FP}$  
+  $\mbox{recall} = \frac{TP}{TP + FN}$
+  
+  The F1 measure is the harmonic mean of precision and recall.
+  
+> "purity" Average purity of clusters. The purity of each cluster is the proportion of the points of the majority true group assigned to it.   
+  "Euclidean" Euclidean dissimilarity of the memberships (clue), "Manhattan" Manhattan dissimilarity of the memberships (clue)  
+  "Rand" Rand index (clue)  
+  "cRand" Rand index corrected for chance (clue)  
+  "NMI" Normalized Mutual Information (clue)  
+  "KP" Katz-Powell index (clue)  
+  "angle" Maximal cosine of the angle between the agreements (clue) "diag" Maximal co-classification rate (clue)  
+  "FM" Fowlkes and Mallows’s index (clue)  
+  "Jaccard" Jaccard index (clue)  
+  "PS" Prediction Strength (clue)  
+  "vi" Variation of Information (VI) index (fpc)  
+  
+### 6.3. Evaluating clustering of dynamic streams
+
+For dynamic data streams it is important to evaluate how well the clustering algorithm is able to adapt to the changing cluster structure. For data stream clustering, a horizon is defined as a number of data points. The data stream is split into consecutive horizons and after clustering all the data in a horizon the average sum of squares is reported as an internal measure of cluster quality. Here for each (micro-) cluster the dominant true cluster label is determined and the proportion of points with the dominant label is averaged over all clusters. Algorithms which can better adapt to the changing stream will achieve better evaluation values. This evaluation strategy is implemented in `stream` as function `evaluate_cluster()`. It shares most parameters with `evaluate()` and all evaluation measures for `evaluate()` described above can be used.
+
+### 6.4. Example: Evaluating clustering results
+
+In this example we will show how to calculate evaluation measures, first on a stream without concept drift and then on an evolving stream. First, we prepare a data stream and create a clustering.
+```{r}
+library("stream")
+stream <- DSD_Gaussians(k = 3, d = 2, noise = .05)
+dstream <- DSC_DStream(gridsize = .1)
+update(dstream, stream, n = 500)
+```
+
+The `evaluate()` function takes a `DSC` object containing a clustering and a DSD object with evaluation data to compute several quality measures for clustering.
+```{r}
+evaluate(dstream, stream,  measure=c("numMicro","numMacro","purity","crand", "SSQ"), n = 100)
+```
+We use only a small number of points for evaluation since calculating some measures is computational quite expensive. Individual measures can be calculated using the `measure` argument.
+```{r}
+evaluate(dstream, stream, measure = c("purity", "crand"), n = 500)
+```
+
+Note that this second call of `evaluate()` uses a new and larger set of 500 evaluation data points from the stream and thus the results may vary slightly from the first call. Purity of the micro-clusters is high since each micro-cluster only covers points from the same true cluster, however, the corrected Rand index is low because several micro-clusters split the points from each true cluster. We will see in one of the following examples that reclustering will improve the corrected Rand index.
+
+To evaluate how well a clustering algorithm can adapt to an evolving data stream, stream provides `evaluate_cluster()`. We define an evaluation horizon as a number of data points. Each data point in the horizon is used for clustering and then it is evaluated how well the point’s cluster assignment fits into the clustering (internal evaluation) or agrees with the known true clustering (external evaluation). Average evaluation measures for each horizon are returned.
+
+The following examples evaluate D-Stream on an evolving stream created with `DSD_Benchmark`. This data stream was introduced in Fig. 6 and contains two Gaussian clusters moving from left to right with their paths crossing in the middle. We modify the default decay parameter `lambda` of D-Stream since the data stream evolves relatively quickly and then perform the evaluation over 5000 data points with a horizon of 100.
+```{r}
+stream <- DSD_Benchmark(1)
+dstream <- DSC_DStream(gridsize = .05, lambda = .01)
+ev <- evaluate_cluster(dstream, stream, measure = c("numMicroClusters", "purity"),
+                       n = 5000, horizon = 100)
+head(ev)
+plot(ev[ , "points"], ev[ , "purity"], type = "l", ylim = c(0, 1),
+     ylab = "Avg. Purity", xlab = "Points")
+```
+
+The plot shows the development of the average micro-cluster purity (how well each micro- cluster only represents points of a single group in the ground truth) over 5000 data points in the data stream. Purity drops before point 3000 significantly, because the two true clusters overlap for a short period of time.
+
+To analyze the clustering process, we can visualize the clustering using `animate_cluster()`. To recreate the previous experiment, we reset the data stream and create a new empty clustering.
+```
+reset_stream(stream)
+dstream <- DSC_DStream(gridsize = .05, lambda = .01)
+r <- animate_cluster(dstream, stream, n = 5000, horizon = 100,
+                     evaluationMeasure = "purity", xlim = c(0, 1), ylim = c(0, 1))
+```
+
+### 6.5. Example: Evaluating reclustered DSC objects
+
+This example shows how to recluster a DSC object after creating it and performing evaluation on the macro clusters. First we create data, a DSC micro-clustering object and run the clustering algorithm.
+```{r}
+stream <- DSD_Gaussians(k = 3, d = 2, noise = .05)
+dstream <- DSC_DStream(gridsize = .05, Cm = 1.5)
+update(dstream, stream, n = 1000)
+dstream
+```
+
+Although the data contains three clusters, the built-in reclustering of D-Stream (joining adjacent dense grids) only produces xx macro-clusters. The reason for this can be found by visualizing the clustering.
+```{r}
+plot(dstream, stream, type = "both")
+```
+
+Micro-clusters are shown as red circles while macro-clusters are represented by large blue crosses. Cluster symbol sizes are proportional to the cluster weights. We see that D-Stream’s reclustering strategy that joining adjacent dense grids is not able to separate the two overlapping clusters in the top part of the plot.
+
+Micro-clusters produced with any clustering algorithm can be reclustered by the   `recluster()` method with any available macro-clustering algorithm (sub-classes of `DSD_Macro`) available in `stream`. Some supported macro-clustering models that are typically used for reclustering are k-means, hierarchical clustering, and reachability. We use weighted k-means since we want to separate overlapping Gaussian clusters.
+
+```{r}
+km <- DSC_Kmeans(k = 3, weighted = TRUE)
+recluster(km, dstream)
+km
+plot(km, stream, type = "both")
+```
+
+This plot shows that weighted k-means on the micro-clusters produces by D-Stream separated the three clusters correctly.
+
+Evaluation on a macro-clustering model automatically uses the macro-clusters. For evaluation, `n` new data points are requested from the data stream and each is assigned to its nearest micro-cluster. This assignment is translated into macro-cluster assignments and evaluated using the ground truth provided by the data stream generator.
+```{r}
+evaluate(km, stream, measure = c("purity", "crand", "SSQ"), n = 1000)
+```
+
+Alternatively, the new data points can also be directly assigned to the closest macro-cluster.
+```{r}
+evaluate(km, stream, c(measure = "purity", "crand", "SSQ"), n = 1000, 
+            assign = "macro")
+```
+
+In this case the evaluation measures purity and corrected Rand slightly increase, since D- Stream produces several micro-clusters covering the area between the top two true clusters. Each of these micro-clusters contains a mixture of points from the two clusters but has to assign all its points to only one resulting in some error. Assigning the points rather to the macro-cluster centers splits these points better and therefore decreases the number of incorrectly assigned points. The sum of squares decreases because the data points are now directly assigned to minimize this type of error.
+
+Other evaluation methods can also be used with a clustering in stream. For example we can calculate and plot silhouette information using the functions available in `cluster`. We take 100 data points and find the assignment to macro clusters in the data stream clustering. By default for a `DSD_Micro` implementation like D-Stream, the data points are assigned to micro clusters and then this assignment is translated to macro-cluster assignments.
+```{r}
+points <- get_points(stream, n = 100)
+assignment <- get_assignment(dstream, points, type = "macro")
+assignment
+```
+
+Note that D-Stream uses a grid for assignment and that points which do not fall inside a dense (or connected transitional) cell are not assigned to a cluster represented by a value of `NA`. For the following silhouette calculation we replace the NAs with 0 to make the unassigned (noise) points its own cluster. Note that the silhouette is only calculated for a small number of points and not the whole stream.
+```{r}
+assignment[is.na(assignment)] <- 0L
+library("cluster")
+plot(silhouette(assignment, dist = dist(points)))
+```
+The plot shows the silhouette plot for the macro-clusters produced by D-Stream. The top cluster (j = 0) represents the points not assigned to any cluster by the algorithm (predicted noise) and thus is expected to have a large negative silhouette. Cluster j = 1 comprises the two overlapping real clusters and thus has lower silhouette values than cluster j = 2. 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

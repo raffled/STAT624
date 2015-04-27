@@ -1,0 +1,62 @@
+Assignment 4: Streams
+--------------------------------
+
+Generate bivariate normal streaming data with different means represening three clusters.
+
+The objective of this exercise is to gererate, expore, and evaluate streaming data. You need to explain the code in each item and discuss the output. Refer to the help files for specific functions.
+
+1. Generate bivariate normal streaming data with different means represening three clusters. Explain how and what is generated, i.e., explain `dsd`.
+
+```{r}
+library("stream")
+set.seed(1002)
+dsd <- DSD_Gaussians(k=3, d=2, mu=rbind(c(1.5,1.3),c(1,1),c(1.2,1)))
+dsd
+```
+
+<!-- Put your comments here -->
+
+2. Perform a threshold nearest neighbor micro-clustering. Explain what is generated at every step. Do the evaluations measures provide good fits?
+
+```{r}
+tnn <- DSC_tNN(r=.1)
+tnn
+update(tnn, dsd, n=500, verbose=FALSE)
+tnn
+head(get_centers(tnn))
+evaluate(tnn, dsd, measure = c("purity", "crand"), n = 500)
+```
+
+<!-- Put your comments here -->
+
+3. Plot the micro-clusters. Interpret the plot.
+
+```{r}
+plot(tnn, dsd)
+```
+
+<!-- Put your comments here -->
+
+4. Perform and plot a $k$-means macro cluster. Explain what is generated at every step. Interpret the plot.
+
+```{r}
+kmeans <- DSC_Kmeans(k=3)
+recluster(kmeans, tnn)
+plot(kmeans, dsd, type = "both")
+```
+
+<!-- Put your comments here -->
+
+5. Do the macro evaluations measures provide good fits? Contrast with 2.
+
+```{r}
+evaluate(kmeans, dsd, measure = c("purity", "crand"), n = 500)
+```
+
+<!-- Put your comments here -->
+
+
+
+
+
+

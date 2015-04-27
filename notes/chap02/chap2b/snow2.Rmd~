@@ -1,0 +1,188 @@
+---
+title: "Chap 2: snow"
+author: "jharner"
+date: "January 28, 2015"
+output: html_document
+---
+
+Again, we use `makeCluster()` to create a cluster.
+```{r}
+library(snow)
+hosts <- c('localhost', 'localhost', 'localhost', 'localhost')
+cl <- makeCluster(hosts, type="SOCK")
+```
+
+### Functions and Environments
+
+Parallel functions in snow typically take a function object as an argument called a worker function. The worker function is byte streamed by `serialize()` and converted to a copy with `unserlialize()`.
+
+Unfortunately namespace environments are serialized by name, not by value. The global environment is also serialized by name. You may need to send variables to workers explicitly, e.g., by `clusterExport()`. You can also create a worker function by another function. But you need to be careful serializing large, unneeded objects.
+
+```{r}
+a <- 1:4
+x <- rnorm(4)
+clusterExport(cl, "x")
+mult <- function(s) s * x
+parLapply(cl, a, mult)
+```
+The function `mult()` is defined at the top level, so its environment is the global environment. `x` is in the global environment and is not serlialzed and thus must be exported.
+
+A more natural solution in this case would be to include `x` as an explicit argument to `mult()`, and then `parLapply()` would send it to the workers for us. However, using `clusterExport()` could be more efficient if we were going to reuse `x` by calling `mult()` many times with `parLapply()`.
+
+```{r}
+pmult <- function(cl) {
+a <- 1:4
+x <- rnorm(4)
+mult <- function(s) s * x
+parLapply(cl, a, mult)
+}
+pmult(cl)
+```
+Since `mult()` is created by `pmult()`, all of `pmult()`’s local variables will be accessible when `mult()` is executed by the cluster workers, including `x`.
+
+But we need to make this more general. Pass `a` and `x` as arguments rather than hard code them.
+```{r}
+pmult <- function(cl, a, x) {
+x # force x
+mult <- function(s) s * x
+parLapply(cl, a, mult)
+}
+scalars <- 1:4
+dat <- rnorm(4)
+pmult(cl, scalars, dat)
+```
+Since `x` is now an argument, we have to force its evaluation before calling `parLapply()`; otherwise, the workers will report that `dat` wasn’t found, since they don’t have access to the environment where `dat` is defined.
+
+`cl` and `a` are serliazed, but are not needed. This would be a problem if `a` is  large. To prevent that, we can reset the environment of `mult()` to the global environment and pass `x` to `mult()` explicitly.
+```{r}
+pmult <- function(cl, a, x) {
+  mult <- function(s, x) s * x
+  environment(mult) <- .GlobalEnv
+  parLapply(cl, a, mult, x)
+}
+scalars <- 1:4
+dat <- rnorm(4)
+pmult(cl, scalars, dat)
+```
+
+### Random Number Generation
+
+`snow` is good for Monte Carlo simulations, bootstrapping, etc. that depend on random numbers. Workers must be seeded differently.
+
+The R packages `rlecuyer` and `rsprng` do this, but must be installed on all workers.
+
+Note: we do not have `rsprng` installed yet.
+
+To use `rlecuyer`, set type to `RNGstream`:
+```{r}
+clusterSetupRNG(cl, type='RNGstream', seed=c(1,22,333,444,55,6))
+unlist(clusterEvalQ(cl, rnorm(1)))
+stopCluster(cl)
+```
+To use a random seed with `rlecuyer`, you’ll have to specify it explicitly using the `seed` argument, which is a vector of six integers.
+
+Use the same `seed` to get reproducible results.
+
+We can also get reproducible results using `clusterApply()`, but not with `clusterAp plyLB()` because `clusterApply()` always uses the same task scheduling.
+
+### snow Configuration
+
+Options for how the cluster is created can be specified as named arguments to the cluster creation function, e.g., `makeCluster()`, `makeSOCKcluster()`, `makeMPIcluster()`.
+```{r}
+library(snow)
+hosts <- c('localhost', 'localhost', 'localhost', 'localhost')
+cl <- makeCluster(hosts, type="SOCK")
+setDefaultClusterOptions(outfile="")
+stopCluster(cl)
+Sys.info()[['nodename']]
+Sys.info()[['sysname']]
+Sys.info()[['user']]
+cl <- makeCluster(hosts, type="SOCK", master=Sys.info()[['nodename']])
+stopCluster(cl)
+```
+You can also use the `setDefaultClusterOptions()` function to change a default config- uration option during an R session. By default, the outfile option is set to `/dev/null`, which causes all worker output to be redirected to the null device. To prevent output from being redirected, you can change the default value of outfile to the empty string.
+
+Table 2-1 lists the snow configuration options.
+
+Workers can be configured differently, e.g., if their architectures are different, but it is tricky. Two mechanisms available for that with the socket transport.  
+* Set the `homogeneous` option to `FALSE`, which causes snow to use a special startup script to launch the workers.  
+* Call `makeSOCKcluster()` and specify the worker machines as a list of lists. In this case, the hostname of the worker is specified by the host element of each sublist.  
+```{r}
+library(snow)
+workerlist <- list(list(host = "localhost"), list(host = "localhost", user = "jharner"))
+cl <- makeSOCKcluster(workerlist)
+clusterEvalQ(cl, Sys.info()[['user']])
+stopCluster(cl)
+```
+
+### Installing Rmpi
+
+Installing `Rmpi` can be problematic because it depends on MPI being previously installed. Also, there are multiple MPI distributions. Open MPI is the preferred MPI distribution.
+
+On Ubuntu install Open MPI with `apt-get` since `apt-get` will automatically install a compatible version of MPI.
+
+### Executing snow Programs on a cluster with Rmpi
+
+Using the socket transport doesn’t require any additional software to install, making it the most portable `snow` transport. However, the MPI transport is probably the most popular, at least on clusters.
+
+To create an MPI cluster object, set the `type` argument of `makeCluster()` to `MPI` or use the `makeMPIcluster()` function
+
+Note: Using `makeMPIcluster(mpi.universe.size() - 1)` will not work since we do not have a true cluster, i.e., `mpi.universe.size()` is 1.
+
+```{r}
+library(snow)
+library(Rmpi)
+hosts <- c('localhost', 'localhost', 'localhost', 'localhost')
+mpi.universe.size()
+cl <- makeCluster(names=hosts, 4, type="MPI")
+r <- clusterEvalQ(cl, R.version.string)
+print(unlist(r))
+stopCluster(cl)
+```
+This creates a spawned cluster, since the workers are all started by snow for you via the `mpi.comm.spawn()` function.
+
+You can’t specify the machines on which to execute the workers with `makeMPIcluster()`. That is done with a separate program that comes with your MPI distribution. Open MPI comes with three utilities for executing MPI programs: `orterun`, `mpirun`, and `mpiexec`.
+
+Use `orterun` to execute the R interpreter, which in turn executes the R script. For example, consider the `mpi.R` script:
+```
+library(snow)
+library(Rmpi)
+cl <- makeMPIcluster(mpi.universe.size() - 1)
+r <- clusterEvalQ(cl, R.version.string)
+print(unlist(r))
+stopCluster(cl)
+mpi.quit()
+```
+
+To execute `mpi.R` using the local machine as the master, and `n1`, `n2`, `n3` and `n4` as the workers, we can use the command:
+```
+% orterun -H localhost,n1,n2,n3,n4 -n 1 R --slave -f mpi.R
+```
+
+### Executing snow Programs with a Batch Queueing System
+
+Many cluster administrators require that all parallel programs be executed via a batch queueing system. There are different ways that this can be done, and different batch queueing systems, but I will describe a method that has been commonly used for a long time, and is supported by many batch queueing systems, such as `PBS/TORQUE`.
+
+You submit a shell script, and the shell script executes your R script using `orterun`.
+
+### Troubleshooting snow Programs
+
+When using the socket transport, the single most useful method of troubleshooting is *manual* mode. In manual mode, you start the workers yourself, rather than having snow start them for you. 
+
+```{r}
+# cl <- makeCluster(4, type="SOCK", manual=TRUE, outfile="")
+
+# cl <- makeCluster(c('localhost', 'localhost', 'localhost', 'localhost'), type="SOCK",   manual=TRUE, outfile="")
+
+# cl <- makeCluster(c('localhost'), type="SOCK")
+# stopCluster(cl)
+```
+
+snow provides a useful variety of functions that support embarrassingly parallel computation. snow doesn’t provide functions for explicitly communicating between the master and workers, and in fact, the workers never communicate between themselves.
+
+
+
+
+
+
+

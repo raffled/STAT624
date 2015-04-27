@@ -1,0 +1,65 @@
+---
+title: 'Chap 1: Getting Started'
+author: "jharner"
+date: "January 25, 2015"
+output: html_document
+---
+
+## Why R?
+
+R is a high-quality, cross-platform, open-source statistical software product, which has an interactive console for exploratory work. It can run as a scripting language to repeat a process you’ve captured. It has a lot of statistical calculations built-in.
+
+R also has a rich ecosystem of add-on packages and a variety of GUIs.
+
+## Why Not R?
+
+R’s limitations: 
+
+* single-threaded  
+
+> The R language has no explicit constructs for parallelism, such as threads.
+
+* memory bound
+
+> R requires that your entire dataset to fit in memory (RAM).
+
+## The Solution: Parallel Execution
+
+Workarounds:  
+
+* Build R against a multithreaded basic linear algebra subprogram (BLAS).  
+
+* Use a relational database or another manual method to retrieve your data in smaller, more manageable pieces.  
+
+* Use *parallelism* to spread work across multiple CPUs.  
+
+## A Road Map for This Book
+
+### What We’ll Cover
+
+Each chapter is a look into one strategy for R parallelism, including:  
+
+* What it is  
+* Where to find it  
+* How to use it  
+* Where it works well, and where it doesn’t  
+
+### What We’ll Assume You Already Know
+
+The basics of R. The `lapply()` function plays an important role in this book.
+
+## In a Hurry?
+
+See the text:  
+**snow**  
+**multicore**  
+**parallel**  
+**R+Hadoop**  
+**RHIPE**  
+**Segue**  
+
+
+
+
+
+

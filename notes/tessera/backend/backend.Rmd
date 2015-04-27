@@ -1,0 +1,307 @@
+---
+title: "Store/Compute Backends"
+author: "jharner"
+date: "March 10, 2015"
+output: html_document
+---
+
+## Backend Choices
+
+The examples we have seen so far have used very small datasets. What if we have more data than fits in memory? In this section we cover additional backends to `datadr` that allow us to scale the D&R approach to very large datasets.
+
+`datadr` has been designed to be extensible, providing the same interface to multiple backends. Thus all of the examples we have illustrated so far can be run with the code unchanged on data registered to a different backend.
+
+The general requirements for a backend to the `datadr` interface are:  
+
+* key-value storage  
+* MapReduce computation  
+
+Additionally, a backend must have bindings that allow us to access data and interface with MapReduce from inside of R.
+
+All of the examples we have seen so far have been for:
+
+* "small" data, using in-memory R lists as the key-value store and a simple R implementation of MapReduce to provide computation;
+
+Two other options have been implemented for "medium" and "large" data.
+
+See the figure.
+
+We spend much of our time in `RHIPE` with very large datasets. This is the only implemented backend that requires substantial effort to get up and run, which entails installing and configuring `Hadoop` and `RHIPE` on a cluster. The other two options can be used on a single workstation. The "medium" option stores data on local disk and processes it using multicore R. This is a great intermediate backend and is particularly useful for processing results of Hadoop data that are still too large to fit into memory. In addition to operating on small data, the "small" option of in-memory data works well as a backend for reading in a small subset of a larger data set and testing methods before applying across the entire data set.
+
+The "medium" and "large" out-of-memory key-value storage options require a connection to be established with the backend. Other than that, the only aspect of the interface that changes from one backend to another is a `control` method, from which the user can specify backend-specific settings and parameters. We will provide examples of how to use these different backends in this section.
+
+For each backend, we will in general follow the process of the following:  
+
+* Initiating a connection to the backend
+* Adding data to the connection
+* Initiating a ddo/ddf on the connection
+* A D&R example
+* A MapReduce example
+
+## Small: Memory / CPU
+
+The examples we have seen so far have all been based on in-memory key-value pairs. Thus there will be nothing new in this section. However, we will go through the process anyway to draw comparisons to the other backends and show how the interface stays the same.
+
+We will stick with a very simple example using the `iris` data.
+
+Initiating an in-memory ddf
+With the in-memory backend, there is not a storage backend to "connect" to and add data to. We can jump straight to initializing a ddo/ddf from data we already have in our environment.
+
+For example, suppose we have the following collection of key-value pairs:
+```{r}
+library(datadr)
+irisKV <- list(
+   list("key1", iris[1:40,]),
+   list("key2", iris[41:110,]),
+   list("key3", iris[111:150,]))
+```
+
+As we have seen before, we can initialize this as a ddf with the following:
+```{r}
+# initialize a ddf from irisKV
+irisDdf <- ddf(irisKV)
+```
+
+### D&R example
+
+For a quick example, let's create a "by species" division of the data, and then do a recombination to compute the coefficients of a linear model of sepal length vs. sepal width:
+```{r}
+# divide in-memory data by species
+bySpecies <- divide(irisDdf, by = "Species")
+# transform bySpecies to a data frame of lm coefficients
+bySpeciesLm <- addTransform(bySpecies, function(x) {
+   coefs <- coef(lm(Sepal.Length ~ Petal.Length, data = x))
+   data.frame(slope = coefs[2], intercept = coefs[1])
+})
+# compute lm coefficients for each division and rbind them
+recombine(bySpeciesLm, combRbind)
+```
+
+### MapReduce example
+
+For a MapReduce example, let's take the `bySpecies` data and find the 5 records with the highest sepal width:
+```{r}
+# map returns top 5 rows according to sepal width
+top5map <- expression({
+   v <- do.call(rbind, map.values)
+   collect("top5", v[order(v$Sepal.Width, decreasing = TRUE)[1:5],])
+})
+
+# reduce collects map results and then iteratively rbinds them and returns top 5
+top5reduce <- expression(
+   pre = {
+      top5 <- NULL
+   }, reduce = {
+      top5 <- rbind(top5, do.call(rbind, reduce.values))
+      top5 <- top5[order(top5$Sepal.Width, decreasing = TRUE)[1:5],]
+   }, post = {
+      collect(reduce.key, top5)
+   }
+)
+
+# execute the job
+top5 <- mrExec(bySpecies, map = top5map, reduce = top5reduce)
+# get the result
+top5[[1]]
+```
+
+## Medium: Disk / Multicore
+
+The "medium" key-value backend stores data on your machine's local disk, and is good for datasets that are bigger than will fit in (or are manageable in) your workstation's memory, but not so big that processing them with the available cores on your workstation becomes infeasible. Typically this is good for data in the hundreds of megabytes. It can be useful sometimes to store even very small datasets on local disk.
+
+### Initiating a disk connection
+
+To initiate a local disk connection, we use the function `localDiskConn()`, and simply point it to a directory on our local file system.
+```{r}
+# initiate a disk connection to a new directory /__tempdir__/irisKV
+irisDiskConn <- localDiskConn(file.path(tempdir(), "irisKV"), autoYes = TRUE)
+```
+
+Note that in this tutorial we are using a temporary directory as the root directory of our local disk objects through calling `tempdir()`. You wouldn't do this in a real analysis but this makes the example run well in a non-intrusive platform-independent way.
+
+By default, if the directory does not exist, `localDiskConn()` will ask you if you would like to create the directory. Since we specify `autoYes = TRUE`, the directory is automatically created.
+```{r}
+# print the connection object
+irisDiskConn
+```
+
+`irisDiskConn` is simply a `kvConnection` object that points to the directory. Meta data containing data attributes is also stored in this directory. If we lose the connection object `irisDiskConn`, the data still stays on the disk, and we can get our connection back by calling
+```
+irisDiskConn <- localDiskConn(file.path(tempdir(), "irisKV"))
+```
+
+Any meta data that was there is also read in. If you would like to connect to a directory but reset all meta data, you can call `localDiskConn()` with `reset = TRUE`.
+
+Data is stored in a local disk connection by creating a new `.Rdata` file for each key-value pair. For data with a very large number of key-value pairs, we can end up with too many files in a directory for the file system to handle efficiently. It is possible to specify a parameter `nBins` to `localDiskConn()`, which tells the connection that new data should be equally placed into `nbins subdirectories`. The default is `nBins = 0`.
+
+### Adding data
+
+We have initiated a "localDiskConn" connection, but it is just an empty directory. We need to add data to it. With the same key-value pairs as before:
+```{r}
+irisKV <- list(
+   list("key1", iris[1:40,]),
+   list("key2", iris[41:110,]),
+   list("key3", iris[111:150,]))
+```
+
+We can add key-value pairs to the connection with `addData()`, which takes the connection object as its first argument and a list of key-value pairs as the second argument. For example:
+```{r}
+addData(irisDiskConn, irisKV[1:2])
+```
+
+Here we added the first 2 key-value pairs to disk. We can verify this by looking in the directory:
+```{r}
+list.files(irisDiskConn$loc)
+```
+
+"_meta" is a directory where the connection metadata is stored. The two `.Rdata` files are the two key-value pairs we just added. The file name is determined by the md5 hash of the data in the key (and we don't have to worry about this).
+
+We can call `addData()` as many times as we would like to continue to add data to the directory. Let's add the final key-value pair:
+```{r}
+addData(irisDiskConn, irisKV[3])
+```
+
+Now we have a connection with all of the data in it.
+
+### Initializing a ddf
+
+We can initialize a ddo/ddf with our disk connection object:
+```{r}
+# initialize a ddf from irisDiskConn
+irisDdf <- ddf(irisDiskConn)
+```
+
+As noted before, with in-memory data, we initialize ddo/ddf objects with in-memory key-value pairs. For all other backends, we pass a connection object. `irisDdf` is now a distributed data frame that behaves in the same way as the one we created for the in-memory case. The data itself though is located on disk.
+
+The connection object is saved as an attribute of the ddo/ddf.
+```{r}
+# print irisDdf
+irisDdf
+```
+
+We see that the connection info for the object is added to the printout of irisDdf. Also, note that nearly all of the attributes have not been populated, including the keys. This is because the data is on disk and we need to pass over it to compute most of the attributes:
+```{r}
+# update irisDdf attributes
+irisDdf <- updateAttributes(irisDdf)
+```
+
+### D&R Example
+
+Let's see how the code looks for the D&R example on the local disk data:
+```{r}
+# divide local disk data by species
+bySpecies <- divide(irisDdf, 
+   by = "Species",
+   output = localDiskConn(file.path(tempdir(), "bySpecies"), autoYes = TRUE),
+   update = TRUE)
+```
+
+This code is the same as what we used for the in-memory data except that in `divide()`, we also need to specify an output connection. If `output` is not provided, an attempt is made to read the data in to an in-memory connection. Here we specify that we would like the output of the division to be stored on local disk in `bySpecies` in our R temporary directory.
+
+As stated before, note that local disk objects persists on disk. I know where the data and metadata for the `bySpecies` object is located. If I lose my R session or remove my object, I can get it back. All attributes are stored as meta data at the connection, so that I don't need to worry about recomputing anything:
+```{r}
+# remove the R object "bySpecies"
+rm(bySpecies)
+# now reinitialize
+bySpecies <- ddf(localDiskConn(file.path(tempdir(), "bySpecies")))
+```
+
+The code for the recombination remains exactly the same:
+```{r}
+# transform bySpecies to a data frame of lm coefficients
+bySpeciesLm <- addTransform(bySpecies, function(x) {
+   coefs <- coef(lm(Sepal.Length ~ Petal.Length, data = x))
+   data.frame(slope = coefs[2], intercept = coefs[1])
+})
+# compute lm coefficients for each division and rbind them
+recombine(bySpeciesLm, combRbind)
+```
+
+### Interacting with local disk ddo/ddf objects
+
+Note that all interactions with local disk ddo/ddf objects are the same as those we have seen so far.
+
+Access data by index or by key:
+```{r}
+bySpecies[[1]]
+bySpecies[["Species=setosa"]]
+```
+
+These extractors find the appropriate key-value pair files on disk, read them in, and return them.
+
+Also, all the accessors like getKeys() work just the same:
+```{r}
+getKeys(bySpecies)
+```
+
+### MapReduce example
+
+Here we again find the top 5 iris records according to sepal width.
+```{r}
+# map returns top 5 rows according to sepal width
+top5map <- expression({
+   counter("map", "mapTasks", 1)
+   v <- do.call(rbind, map.values)
+   collect("top5", v[order(v$Sepal.Width, decreasing = TRUE)[1:5],])
+})
+
+# reduce collects map results and then iteratively rbinds them and returns top 5
+top5reduce <- expression(
+   pre = {
+      top5 <- NULL
+   }, reduce = {
+      top5 <- rbind(top5, do.call(rbind, reduce.values))
+      top5 <- top5[order(top5$Sepal.Width, decreasing = TRUE)[1:5],]
+   }, post = {
+      collect(reduce.key, top5)
+   }
+)
+
+# execute the job
+top5 <- mrExec(bySpecies, map = top5map, reduce = top5reduce)
+# get the result
+top5[[1]]
+```
+
+The call to `counter()` in the map expression illustrates some of the control parameters described at the end of this section.
+
+### control options
+
+There are various aspects of backends that we want to be able to have control oer. The `control` argument of a MapReduce job provides a general interface to do this. A `control` argument is simply a named list of settings for various control parameters.
+
+All of the data operations run MapReduce jobs and therefore have a `control` argument.
+
+Currently, the available control parameters for MapReduce on a local disk connection are:
+
+* cluster: a cluster object from `makeCluster()` to use to do distributed computation -- default is NULL (single core)  
+* `mapred_temp_dir`: where to put intermediate key-value pairs in between map and reduce -- default is `tempdir()`  
+* `map_buff_size_bytes`: the size of batches of key-value pairs to be passed to the map -- default is 10485760 (10 Mb). The cores in the cluster are filled with key-value pairs to process, up to each collection exceeding this size.  
+* `map_temp_buff_size_bytes`: the size of the batches of key-value pairs to flush to intermediate storage from the map output -- default is 10485760 (10 Mb)  
+* `reduce_buff_size_bytes`: the size of the batches of key-value pairs to send to the reduce -- default is 10485760 (10 Mb)  
+
+The function `localDiskControl()` is used to create the default list. Any parameter specified will override the default.
+
+To illustrate the use of control for local disk connections, let's rerun the "top 5" MapReduce job but this time with a 3-core cluster:
+```{r}
+# create a 3 core cluster
+library(parallel)
+cl <- makeCluster(3)
+
+# run MapReduce job with custom control
+top5a <- mrExec(bySpecies, 
+   map = top5map, reduce = top5reduce,
+   control = localDiskControl(cluster = cl))
+```
+
+The map and reduce tasks for this job were run on a 3-core cluster.
+
+We can verify that our new computation did indeed run 3 separate map tasks (one on each core) by comparing the counters from the first and second jobs:
+```{r}
+# how many map tasks were there before using a 3-core cluster
+counters(top5)$map$mapTasks
+# how many map tasks were there after using a 3-core cluster
+counters(top5a)$map$mapTasks
+```
+
+
+

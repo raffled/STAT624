@@ -1,0 +1,89 @@
+---
+title: 'Chap 3: Obtaining Data'
+author: "jharner"
+date: "January 20, 2015"
+output: html_document
+---
+
+This chapter deals with the first step of the OSEMN model: obtaining data.
+
+According to the Unix philosophy, text is a universal interface. Almost every command-line tool takes text as input, produces text as output, or both. 
+
+Data can be obtained in several ways:  
+* downloading it from a server  
+* querying a database  
+* connecting to a web API  
+In other cases it comes in a compressed form or in a binary format.  
+
+## Overview
+
+## Copying Local Files to the Data Science Toolbox
+
+### Local Version of Data Science Toolbox
+
+The local version of the Data Science Toolbox is an isolated virtual environment. However, there is one exception: files can be transfered in and out the Data Science Toolbox. The local directory from which you ran `vagrant up` (which is the one that contains the file Vagrantfile) is mapped to a directory in the Data Science Toolbox called `/vagrant`.
+
+The contents of this directory:
+```
+ls -1 /vagrant
+```
+Copy or move a file from your Desktop (for example) to the directory that contains Vagrantfile.
+```
+cp ~/Desktop/cdat2.csv .
+```
+Then move it to `~/book/ch03/data`.
+```
+mv /vagrant/cdat2.csv ~/book/ch03/data
+```
+
+### Remote Version of Data Science Toolbox
+
+If you are running Linux or Mac OS X, you can use `scp`, which stands for secure copy, to copy files onto the EC2 instance.
+
+## Decompressing Files
+
+If the original data set is very large or it’s a collection of many files, the file may be a (compressed) archive. Data sets which contain many repeated values (such as the words in a text file or the keys in a `JSON` file) are especially well suited for compression.
+
+Common file extensions of compressed archives are: `.tar.gz`, `.zip`, and `.rar`. To decompress these, you would use the command-line tools `tar`, `unzip`, and `unrar`, respectively.
+
+We can compress `cdat2.csv` as follows:
+```
+tar -czf cdat2.tar.gz cdat2.csv
+```
+
+In order to extract a file named `logs.tar.gz`, you would use:
+```
+tar -xzvf cdat2.tar.gz
+```
+`tar` is notorious for its many options. In this case, the four options `x`, `z`, `v`, and `f` specify that `tar` should *extract* files from an archive, use `gzip` as the decompression algorithm, be *verbose*, and use the *file* `logs.tar.gz`.
+
+Rather than remembering the different command-line tools and their options, there’s a handy script called `unpack`.
+
+## Querying Relational Databases
+
+Most companies store their data in a relational database, e.g., MySQL, PostgreSQL, and SQLite. These databases all have a slightly different way of interfacing with them. Some provide a command-line tool or a command-line interface, while others do not.
+
+A command-line tool called `sql2csv`, which is part of the `Csvkit` suite leverages the Python `SQLAlchemy` package. Only one tool can execute queries on many different databases, including MySQL, Oracle, PostgreSQL, SQLite, Microsoft SQL Server, and Sybase. The output of `sql2csv` is, as its name suggests, in CSV format. We can obtain data from relational databases by executing a `SELECT` query on them (sql2csv also support `INSERT`, `UPDATE`, and `DELETE` queries).
+
+Using a `SQLite` database named `iris.db`, `sql2csv` can be invoked as follows:
+```
+sql2csv --db 'sqlite:///data/iris.db' --query 'SELECT * FROM iris '\
+'WHERE sepal_length > 7.5'
+```
+The `--db` option specifies the database URL, of which the typical form is:   
+`dialect+driver://user name:password@host:port/database`.
+
+## Downloading from the Internet
+
+The Internet provides the largest resource for data. This data is available in various forms, using various protocols. The command-line tool `cURL` can be considered the command line’s Swiss Army knife when it comes to downloading data from the Internet.
+
+When `cURL` is used to access a URL, the data is downloaded as is, and is printed to standard output. Other command-line tools may then be used to process this data further.
+
+The easiest invocation of `curl` is to simply specify a URL as a command-line argu‐ ment. For example, to download Mark Twain’s Adventures of Huckleberry Finn from Project Gutenberg, we can run the following command:
+```
+curl -s http://www.gutenberg.org/cache/epub/76/pg76.txt | head -n 10
+```
+
+
+
+

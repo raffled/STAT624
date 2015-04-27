@@ -1,0 +1,299 @@
+R + Hadoop
+----------
+
+## Quick Look
+
+Motivation: Run R code over different parameters or inputs.  
+Solution: Use a Hadoop cluster.  
+Good because: Hadoop distributes work ovre a cluster of machines.  
+
+## How It Works
+
+Submitting work to a Hadoop cluster: *streaming* and *the Java API*.
+
+* *Streaming*: Write the Map and Reduce operations as R scripts (or in another scripting language).
+
+> The Hadoop framework launches the R scripts at appropriate times and communicates by standard input and standard output.
+
+* *Java API*: write the Map and Reduce operations in Java.
+
+> The Java code runs `Runtime.exec()` to invoke the R scripts.
+
+The appropriate method depends on several factors, including your understanding of Java versus R, and the particular problem you’re trying to solve. 
+
+* Streaming tends to win for rapid development.  
+
+* Java API is useful for working with data such as images or sound files. 
+
+## Setting Up
+
+You can fetch the Hadoop distribution from the [Apache Hadoop web site](http://hadoop.apache.org/). If you also have a Java runtime (JRE or SDK) installed, this is all you’ll need to submit work to a Hadoop cluster. Just extract the ZIP or tar file and run the `hadoop` command.
+
+## Working with It
+
+In this section several examples will be given:  
+* The Map phase of MapReduce for task parallelization;  
+* The full Map and Reduce to populate and operate on a `data.frame`.  
+
+The unifying theme of these examples is the need to execute a block of long-running R code for several (hundred, or thousand, or whatever) iterations. For example:  
+
+* a function that will run once for each of many input values, such as an analysis over each day’s worth of historical data or a series of Markov Chains. 
+* a variety of permutations over a function’s parameter values in search of some ideal set (a parameter sweep), such as in a timeseries modeling exercise.
+
+If each iteration is independent, i.e., not rely on the results from any previous iteration, this is an ideal candidate for parallel execution.
+
+### Simple Hadoop Streaming (All Text)
+
+#### Situation:  
+The input data is several million lines of plain-text phone call records. Each CSV input line is of the format:
+```
+  {date}, {caller num}, {caller carrier}, {dest num}, {dest carrier}, {length}
+```
+The plan is to analyze each call record separately, so there’s no need to sort and group the data.
+
+#### The code:  
+To analyze each call record, consider a function `callAnalysis()` that takes all of the record’s fields as parameters:
+```
+callAnalysis( date , caller.num, caller.carrier , dest.num , dest.carrier , length )
+```
+Hadoop streaming does not invoke R functions directly. You provide an R script that calls the functions, and Hadoop invokes your R script.
+
+mapper.R
+```
+#! /usr/bin/env Rscript
+input <- file( "stdin" , "r" )
+while( TRUE ){
+  currentLine <- readLines( input , n=1 )
+  
+  if( 0 == length( currentLine ) ){ break }
+  
+currentFields <- unlist( strsplit( currentLine , "," ) )
+
+result <- callAnalysis(
+  currentFields[1] , currentFields[2] , currentFields[3] ,
+  currentFields[4] , currentFields[5] , currentFields[6] )
+  
+cat( result , "\n" , sep="" )
+}
+
+close( input )
+```
+
+#### Run the Hadoop job from the command line.
+
+A few points:  
+
+* Set parameters as environmental variables.  
+* Set configuration values on the command line with `-D`.  
+* Compress the output.  
+* Kill a task that is nonresponsive.  
+* Divide you input data into sizable chunks, known as *splits*.  
+
+> In a typical Hadoop “big-data” scenario, this is the smart thing to do because it limits the amount of data shipped around the cluster. For “big-CPU” or “big- memory” jobs, in which each input record itself represents a sizable operation, this chunking can actually work against parallelism. When using `NLineInputFormat`, Hadoop treats each line as a split and spreads the work evenly throughout the cluster.
+
+#### Review the output.
+
+A typical Hadoop job will create several files, one for each Reduce operation. Since this is a Map-only job, there is just one file. If the output file is compressed, you will need to uncompress it, e.g., using `gunzip`.
+
+If you find stray content in your job’s output, you can post-process those files, e.g., `grep` the job output file to extract the lines of interest. Or you can supress certain output using `sink()` in your code.
+```
+sink( "/dev/null" ) ## suppress standard output
+  ... do the work ...
+sink() ## restore standard output
+cat( ... your intended result ... )
+  ... exit the script
+```
+
+#### Prototyping A Hadoop Streaming Job
+
+For streaming jobs, you can chain the scripts with pipes to simulate a workflow.
+```
+cat input-sample.txt | ./mapper.R | sort | ./reducer.R
+```
+
+See the Ex1 file.
+
+### Streaming, Redux: Indirectly Working with Binary Data
+
+Hadoop Streaming can only be used for text input and output. This doesn’t preclude you from working with binary data in a streaming job; but it does preclude your Map and Reduce scripts from accepting binary input and producing binary output.
+
+#### Situation:  
+
+Imagine that you want to analyze a series of image files. Perhaps they are frames from a video recording, or a file full of serialized R objects, or maybe you run a large photo-sharing site. For this example, let’s say you have R code that will perform image feature extraction. 
+
+#### The code:
+
+Hadoop Streaming can only handle line-by-line text input and output. One option would be to feed your Hadoop Streaming job an input of pointers to the data, which your R script could then fetch and process locally. For example:  
+
+* Host the data on an internal web server, and feed Hadoop a list of URLs;  
+* Use an NFS mount;  
+* Use scp to pull the files from a remote system;  
+* Make a SQL call to a database system.  
+
+HDFS doesn’t work well with small files.
+
+```
+#! /usr/bin/env Rscript
+input <- file( "stdin" , "r" )
+while( TRUE ){
+  currentLine <- readLines( input , n=1 )
+  if( 0 == length( currentLine ) ){ break
+  }
+  
+  pulledData <- url( currentLine ) )
+
+  result <- imageFeatureExtraction( url( currentLine ) )
+  cat( result , "\n" , sep="" )
+}
+close( input )
+```
+
+#### Run the Hadoop job as before.
+
+#### Review the Output.
+
+if your job yields binary output, you can use the same idea as you did for the input, and push the output to another system:  
+
+* Copy it to an NFS mount;  
+* Use an HTTP POST operation to send the data to a remote web server;  
+* Call scp to ship the data to another system;  
+* Use SQL to push the data to an RDBMS.
+
+#### Caveats.
+
+A Hadoop cluster is a robust, i.e., on the software-side framework and the required hardware layout, you are protected from hard disk failures, node crashes, and even loss of network connectivity.
+
+Everything required for the job must *exist within the cluster*. Map and Reduce scripts, input data, and output must all live in HDFS (S3 if you are using Elastic MapReduce).
+
+For systems or services outside of the cluster, you lose in four ways:  
+
+* Loss of robustness  
+
+> Hadoop can’t manage a failure or crash in a remote service.
+
+* Scaling  
+
+> The remote web server or NFS mount may fail under the weight of a Hadoop-inflicted flood of activity.
+
+* Overhead
+
+> Any of the methods described above—SSH, web server, NFS mount—requires additional setup.
+
+* Idempotence/risk of side effects  
+
+> Hadoop may employ speculative execution, i.e., Hadoop might run a given Map or Reduce task more than once. Hadoop may kill a task in mid-run and launch it elsewhere (if it detects a timeout) or it may concurrently launch a duplicate task (if the first task seems to be taking too long to complete).
+
+> When you leverage data or services from outside the cluster, those are considered side effects of a task. Hadoop doesn’t know what your Map or Reduce code is doing; it only knows how long it takes to run, and whether it meets Hadoop’s criteria for success or failure. That means it’s up to you to handle side effects such as duplicate submissions to that remote web server.
+
+### Processing Related Groups (the Full Map and Reduce Phases)
+
+#### Situation:
+
+You want to collect related records and operate on that group as a whole.
+Returning to the “phone records” example, let’s say you want to analyze every number’s output call patterns. That would require you to first gather all of the calls made by each number (Map phase) and then process those records together (Reduce phase).
+
+#### The code:
+
+As noted above, this will require both the Map and Reduce phases. The Map phase code will extract the caller’s phone number to use as the key. 
+
+mapper.R:
+```
+#! /usr/bin/env Rscript
+input <- file( "stdin" , "r" )
+while( TRUE ){
+  currentLine <- readLines( input , n=1 )
+  if( 0 == length( currentLine ) ){
+    break
+  }
+  currentFields <- unlist( strsplit( currentLine , "," ) )
+  result <- paste( currentFields[2] , currentLine , sep="\t" )
+  cat( result , "\n" )
+}
+
+close( input )
+```
+The first field in the comma-separated line is the caller’s phone number, which serves as the key output from the Map task.
+
+The Reducer code builds a `data.frame` of all calls made by each number, and then passes the `data.frame` to the analysis function.
+
+In a Reducer script, each input line is of the format:  
+```
+  {key}{tab}{value}
+```
+where `{key}` and `{value}` are a single key/value pair, as output from a Map task.
+
+The Reducer’s job is to collect all of the values for a given key, then process them together. Hadoop may pass a single Reducer values for multiple keys, but it will sort them first. When the key changes, then, you know you’ve seen all of the values for the previous key. You can process those values as a group, then move on to the next key.
+
+reducer.R
+```
+input <- file( "stdin" , "r" )
+lastKey <- ""
+
+tempFile <- tempfile( pattern="hadoop-mr-demo-" , fileext="csv" )
+tempHandle <- file( tempFile , "w" )
+
+while( TRUE ){
+  currentLine <- readLines( input , n=1 )
+  if( 0 == length( currentLine ) ){ 
+    break
+  }
+  tuple <- unlist( strsplit( currentLine , "\t" ) )
+  currentKey <- tuple[1]
+  currentValue <- tuple[2]
+
+  if( ( currentKey != lastKey ) ){
+    if( lastKey != "" ){
+      close( tempHandle )
+      bucket <- read.csv( tempFile , header=FALSE )
+      result <- anotherCallAnalysisFunction( bucket )
+      cat( currentKey , "\t" , result , "\n" )
+      tempHandle <- file( tempFile , "w" )
+    }
+  
+    lastKey <- currentKey
+  }
+  
+  cat( currentLine , "\n" , file=tempHandle )
+}
+
+close( tempHandle )
+
+bucket <- read.csv( tempFile , header=FALSE )
+result <- anotherCallAnalysisFunction( bucket )
+cat( currentKey , "\t" , result , "\n" )
+
+unlink( tempFile ) close( input )
+
+close( input )
+```
+
+#### Caveats:
+
+Typically, the Map phase is very lightweight (since it’s just used to assign keys to each input) and the heavy lifting takes place in the Reduce operation. To take advantage of the parallelism of the Reduce stage, then, you’ll need to meet two conditions:  
+
+1. A large number of unique keys output from the Map phase  
+2. Each key should have a similar number of records (at least, no one key should clearly dominate)  
+
+## When It Works...
+
+Hadoop splits the work across a cluster, sending each unit of work to a different machine. Even though R itself is single-threaded, this simulates having one machine with tens or hundreds of CPUs at your disposal. 
+
+## ...And When It Doesn’t
+
+#### Not completely spared from the memory wall
+
+> Hadoop is a compute solution, not a memory grid. 
+
+#### Needs infrastructure
+
+> R+Hadoop works best if you already have access to an in-house cluster. Elastic MapReduce, the cloud-based solution, runs a close second.
+
+#### Needs consistent cluster nodes
+
+> Hadoop executes your R scripts for you, and for streaming jobs it will even copy the R scripts to the cluster for you. It’s otherwise up to you to keep the runtime environment consistent across the cluster.
+
+## The Wrap-up
+
+R+Hadoop gives you the most control and the most power, but comes at the cost of a Hadoop learning curve.
+
+
